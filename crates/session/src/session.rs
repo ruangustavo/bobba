@@ -10,8 +10,8 @@ use std::time::{Duration, Instant};
 use bobba_protocol::key_recovery::{Probation, ProbationVerdict, SBox, find_candidates, shortlist};
 use bobba_protocol::{Direction, Framer, HMessage, Packet, PacketReader, Rc4};
 use bytes::Bytes;
-use futures::StreamExt;
 use futures::stream::FuturesOrdered;
+use futures::{FutureExt, StreamExt};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{TcpListener, TcpStream};
@@ -29,6 +29,8 @@ const VERSION_PACKET_MAX_LENGTH: u32 = 100;
 const ENCRYPTED_READS_BEFORE_RECOVERY: u32 = 3;
 const KEY_RECOVERY_ATTEMPTS: usize = 2;
 const PROBATION_LIMIT: Duration = Duration::from_secs(2);
+const WRITE_BATCH_CAPACITY: usize = 64 * 1024;
+const PENDING_WRITES_LIMIT: usize = 4096;
 const KEY_EXCHANGE_LAST_INDEX: u32 = 1;
 const KEY_EXCHANGE_WITH_FLAG_MIN_LENGTH: usize = 500;
 const KEY_EXCHANGE_MIN_LENGTH: usize = 200;
@@ -232,8 +234,8 @@ impl Session {
         });
         let (client_read, client_write) = self.client.into_split();
         let (server_read, server_write) = self.server.into_split();
-        let (outgoing_tx, outgoing_rx) = mpsc::unbounded_channel();
-        let (incoming_tx, incoming_rx) = mpsc::unbounded_channel();
+        let (outgoing_tx, outgoing_rx) = mpsc::channel(PENDING_WRITES_LIMIT);
+        let (incoming_tx, incoming_rx) = mpsc::channel(PENDING_WRITES_LIMIT);
 
         let mut tasks = JoinSet::new();
         tasks.spawn(
@@ -311,7 +313,7 @@ enum Decryption {
 struct Reader<I> {
     direction: Direction,
     socket: OwnedReadHalf,
-    writer: mpsc::UnboundedSender<PendingWrite>,
+    writer: mpsc::Sender<PendingWrite>,
     shared: Arc<Shared<I>>,
     framer: Framer,
     next_index: u32,
@@ -328,7 +330,7 @@ impl<I: Interceptor> Reader<I> {
     fn new(
         direction: Direction,
         socket: OwnedReadHalf,
-        writer: mpsc::UnboundedSender<PendingWrite>,
+        writer: mpsc::Sender<PendingWrite>,
         shared: Arc<Shared<I>>,
     ) -> Self {
         Self {
@@ -355,7 +357,7 @@ impl<I: Interceptor> Reader<I> {
             let read = tokio::select! {
                 read = self.socket.read(&mut self.buffer) => read,
                 () = tokio::time::sleep_until(probation_deadline.unwrap_or_else(tokio::time::Instant::now)), if probation_deadline.is_some() => {
-                    if let Flow::Stop = self.settle_probation(true) {
+                    if let Flow::Stop = self.settle_probation(true).await {
                         return;
                     }
                     continue;
@@ -363,7 +365,7 @@ impl<I: Interceptor> Reader<I> {
                 Ok(()) = key_updates.changed(), if waiting_for_other_side => {
                     let key = key_updates.borrow_and_update().clone();
                     if let Some(fresh) = key
-                        && let Flow::Stop = self.start_decrypting(fresh)
+                        && let Flow::Stop = Box::pin(self.start_decrypting(fresh)).await
                     {
                         return;
                     }
@@ -388,7 +390,7 @@ impl<I: Interceptor> Reader<I> {
                 .then(|| parse_version_packet(&chunk))
                 .flatten();
             let Some((hotel_version, client_identifier)) = version else {
-                return self.send(ready(WriteAction::Raw(Bytes::from(chunk))));
+                return self.send(ready(WriteAction::Raw(Bytes::from(chunk)))).await;
             };
             self.confirm(hotel_version, client_identifier).await;
         }
@@ -401,11 +403,11 @@ impl<I: Interceptor> Reader<I> {
             };
         }
         match &mut self.decryption {
-            Decryption::Plain => self.dispatch(&chunk),
+            Decryption::Plain => self.dispatch(&chunk).await,
             Decryption::Active(cipher) => {
                 let mut plain = chunk;
                 cipher.apply(&mut plain);
-                self.dispatch(&plain)
+                self.dispatch(&plain).await
             }
             Decryption::Probation {
                 encrypted,
@@ -414,7 +416,7 @@ impl<I: Interceptor> Reader<I> {
             } => {
                 encrypted.extend_from_slice(&chunk);
                 probation.feed(&chunk);
-                self.settle_probation(false)
+                self.settle_probation(false).await
             }
             Decryption::AwaitingKey { encrypted, reads } => {
                 encrypted.extend_from_slice(&chunk);
@@ -422,7 +424,7 @@ impl<I: Interceptor> Reader<I> {
                 if self.direction == Direction::ToClient {
                     let known = self.shared.fresh_key.borrow().clone();
                     return match known {
-                        Some(fresh) => self.start_decrypting(fresh),
+                        Some(fresh) => Box::pin(self.start_decrypting(fresh)).await,
                         None => Flow::Continue,
                     };
                 }
@@ -487,9 +489,9 @@ impl<I: Interceptor> Reader<I> {
                 probation,
                 deadline: tokio::time::Instant::now() + PROBATION_LIMIT,
             };
-            return self.settle_probation(false);
+            return self.settle_probation(false).await;
         }
-        self.fail_recovery()
+        self.fail_recovery().await
     }
 
     async fn scan_while_reading(&mut self) -> Option<Vec<SBox>> {
@@ -522,7 +524,7 @@ impl<I: Interceptor> Reader<I> {
         }
     }
 
-    fn settle_probation(&mut self, out_of_time: bool) -> Flow {
+    async fn settle_probation(&mut self, out_of_time: bool) -> Flow {
         let Decryption::Probation { probation, .. } = &self.decryption else {
             return Flow::Continue;
         };
@@ -531,9 +533,9 @@ impl<I: Interceptor> Reader<I> {
             ProbationVerdict::Undecided(_) if !out_of_time => return Flow::Continue,
             ProbationVerdict::Undecided(_) => match probation.best_guess() {
                 Some(fresh) => fresh,
-                None => return self.fail_recovery(),
+                None => return self.fail_recovery().await,
             },
-            ProbationVerdict::Failed => return self.fail_recovery(),
+            ProbationVerdict::Failed => return self.fail_recovery().await,
         };
         let Decryption::Probation { encrypted, .. } =
             std::mem::replace(&mut self.decryption, Decryption::Plain)
@@ -545,32 +547,32 @@ impl<I: Interceptor> Reader<I> {
             reads: 0,
         };
         self.shared.fresh_key.send_replace(Some(chosen.clone()));
-        self.start_decrypting(chosen)
+        Box::pin(self.start_decrypting(chosen)).await
     }
 
-    fn fail_recovery(&mut self) -> Flow {
+    async fn fail_recovery(&mut self) -> Flow {
         let _ = self.shared.events.send(SessionEvent::KeyRecoveryFailed);
         self.shared.handle.abort();
         Flow::Stop
     }
 
-    fn start_decrypting(&mut self, fresh: Rc4) -> Flow {
+    async fn start_decrypting(&mut self, fresh: Rc4) -> Flow {
         let Decryption::AwaitingKey { encrypted, .. } =
             std::mem::replace(&mut self.decryption, Decryption::Active(fresh.clone()))
         else {
             return Flow::Continue;
         };
-        if let Flow::Stop = self.send(ready(WriteAction::StartEncrypting(fresh))) {
+        if let Flow::Stop = self.send(ready(WriteAction::StartEncrypting(fresh))).await {
             return Flow::Stop;
         }
         let mut plain = encrypted;
         if let Decryption::Active(cipher) = &mut self.decryption {
             cipher.apply(&mut plain);
         }
-        self.dispatch(&plain)
+        self.dispatch(&plain).await
     }
 
-    fn dispatch(&mut self, plain: &[u8]) -> Flow {
+    async fn dispatch(&mut self, plain: &[u8]) -> Flow {
         self.framer.push(plain);
         while let Some(next) = self.framer.next_packet() {
             let Ok(packet) = next else {
@@ -580,7 +582,7 @@ impl<I: Interceptor> Reader<I> {
             let index = self.next_index;
             self.next_index = self.next_index.wrapping_add(1);
             let server_started_encrypting = self.watch_key_exchange(index, &packet);
-            if let Flow::Stop = self.forward(index, packet) {
+            if let Flow::Stop = self.forward(index, packet).await {
                 return Flow::Stop;
             }
             if server_started_encrypting {
@@ -597,7 +599,7 @@ impl<I: Interceptor> Reader<I> {
                 }
                 let known = self.shared.fresh_key.borrow().clone();
                 return match known {
-                    Some(fresh) => self.start_decrypting(fresh),
+                    Some(fresh) => Box::pin(self.start_decrypting(fresh)).await,
                     None => Flow::Continue,
                 };
             }
@@ -629,7 +631,7 @@ impl<I: Interceptor> Reader<I> {
         false
     }
 
-    fn forward(&mut self, index: u32, packet: Packet) -> Flow {
+    async fn forward(&mut self, index: u32, packet: Packet) -> Flow {
         let interceptor = self.shared.interceptor.clone();
         let direction = self.direction;
         let pending = async move {
@@ -642,11 +644,11 @@ impl<I: Interceptor> Reader<I> {
                 verdict,
             }
         };
-        self.send(Box::pin(pending))
+        self.send(Box::pin(pending)).await
     }
 
-    fn send(&self, write: PendingWrite) -> Flow {
-        match self.writer.send(write) {
+    async fn send(&self, write: PendingWrite) -> Flow {
+        match self.writer.send(write).await {
             Ok(()) => Flow::Continue,
             Err(_) => Flow::Stop,
         }
@@ -656,6 +658,7 @@ impl<I: Interceptor> Reader<I> {
 struct Writer<'a, I> {
     direction: Direction,
     socket: OwnedWriteHalf,
+    outgoing: Vec<u8>,
     encryption: Option<Rc4>,
     held_injections: VecDeque<Injection>,
     shared: &'a Shared<I>,
@@ -664,13 +667,14 @@ struct Writer<'a, I> {
 async fn write_loop<I: Interceptor>(
     direction: Direction,
     socket: OwnedWriteHalf,
-    mut pending: mpsc::UnboundedReceiver<PendingWrite>,
+    mut pending: mpsc::Receiver<PendingWrite>,
     mut injections: mpsc::UnboundedReceiver<Injection>,
     shared: Arc<Shared<I>>,
 ) {
     let mut writer = Writer {
         direction,
         socket,
+        outgoing: Vec::with_capacity(WRITE_BATCH_CAPACITY),
         encryption: None,
         held_injections: VecDeque::new(),
         shared: &shared,
@@ -678,20 +682,23 @@ async fn write_loop<I: Interceptor>(
     let mut ordered = FuturesOrdered::new();
     let mut reader_open = true;
     loop {
-        let result = tokio::select! {
+        tokio::select! {
             biased;
             () = shared.handle.cancel.cancelled() => return,
-            Some(action) = ordered.next(), if !ordered.is_empty() => writer.apply(action).await,
-            next = pending.recv(), if reader_open => {
-                match next {
-                    Some(write) => ordered.push_back(write),
-                    None => reader_open = false,
-                }
-                Ok(())
-            }
-            Some(injection) = injections.recv() => writer.inject(injection).await,
-        };
-        if result.is_err() || (!reader_open && ordered.is_empty()) {
+            Some(action) = ordered.next(), if !ordered.is_empty() => writer.apply(action),
+            next = pending.recv(), if reader_open => match next {
+                Some(write) => ordered.push_back(write),
+                None => reader_open = false,
+            },
+            Some(injection) = injections.recv() => writer.inject(injection),
+        }
+        while let Ok(write) = pending.try_recv() {
+            ordered.push_back(write);
+        }
+        while let Some(Some(action)) = ordered.next().now_or_never() {
+            writer.apply(action);
+        }
+        if writer.flush().await.is_err() || (!reader_open && ordered.is_empty()) {
             break;
         }
     }
@@ -699,26 +706,35 @@ async fn write_loop<I: Interceptor>(
 }
 
 impl<I> Writer<'_, I> {
-    async fn write(&mut self, bytes: &[u8]) -> io::Result<()> {
-        match &mut self.encryption {
-            Some(cipher) => {
-                let mut encrypted = bytes.to_vec();
-                cipher.apply(&mut encrypted);
-                self.socket.write_all(&encrypted).await
-            }
-            None => self.socket.write_all(bytes).await,
+    fn write(&mut self, bytes: &[u8]) {
+        let start = self.outgoing.len();
+        self.outgoing.extend_from_slice(bytes);
+        if let Some(cipher) = &mut self.encryption {
+            cipher.apply(&mut self.outgoing[start..]);
         }
     }
 
-    async fn apply(&mut self, action: WriteAction) -> io::Result<()> {
+    async fn flush(&mut self) -> io::Result<()> {
+        if self.outgoing.is_empty() {
+            return Ok(());
+        }
+        let result = self.socket.write_all(&self.outgoing).await;
+        self.outgoing.clear();
+        result
+    }
+
+    fn apply(&mut self, action: WriteAction) {
         let (index, original, verdict) = match action {
-            WriteAction::Raw(bytes) => return self.socket.write_all(&bytes).await,
+            WriteAction::Raw(bytes) => {
+                self.outgoing.extend_from_slice(&bytes);
+                return;
+            }
             WriteAction::StartEncrypting(cipher) => {
                 self.encryption = Some(cipher);
                 while let Some(injection) = self.held_injections.pop_front() {
-                    self.inject(injection).await?;
+                    self.inject(injection);
                 }
-                return Ok(());
+                return;
             }
             WriteAction::Packet {
                 index,
@@ -728,11 +744,11 @@ impl<I> Writer<'_, I> {
         };
         let outcome = match verdict {
             Verdict::Forward => {
-                self.write(original.frame()).await?;
+                self.write(original.frame());
                 Outcome::Forwarded
             }
             Verdict::Edited { packet, by } => {
-                self.write(packet.frame()).await?;
+                self.write(packet.frame());
                 Outcome::Edited { by, sent: packet }
             }
             Verdict::Blocked { by } => Outcome::Blocked { by },
@@ -746,15 +762,14 @@ impl<I> Writer<'_, I> {
                 outcome,
             },
         );
-        Ok(())
     }
 
-    async fn inject(&mut self, injection: Injection) -> io::Result<()> {
+    fn inject(&mut self, injection: Injection) {
         if self.shared.sender_encrypts(self.direction) && self.encryption.is_none() {
             self.held_injections.push_back(injection);
-            return Ok(());
+            return;
         }
-        self.write(injection.packet.frame()).await?;
+        self.write(injection.packet.frame());
         record(
             self.shared,
             LogEntry::Injected {
@@ -763,7 +778,6 @@ impl<I> Writer<'_, I> {
                 by: injection.by,
             },
         );
-        Ok(())
     }
 }
 
