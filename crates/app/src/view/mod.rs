@@ -3,6 +3,8 @@ pub mod connection;
 pub mod extensions;
 pub mod injection;
 pub mod logger;
+pub mod session;
+pub mod setup;
 pub mod skull;
 pub mod theme;
 
@@ -12,10 +14,10 @@ use crate::state::{App, Tab};
 
 pub fn root(s: &App, cx: &mut Cx<App>) -> El {
     let p = theme::paint();
+    let mut layer = Vec::new();
     let content = match s.tab {
         Tab::Connection => connection::view(s),
-        Tab::Logger => logger::view(s),
-        Tab::Injection => injection::view(s),
+        Tab::Injection => injection::view(s, &mut layer),
         Tab::Extensions => extensions::view(s),
     };
     let banner = s.permission_requests.front().map(chrome::permission_banner);
@@ -38,5 +40,5 @@ pub fn root(s: &App, cx: &mut Cx<App>) -> El {
         )
         .child(el().key("statusbar-rule").w_full().h(1.0).fill(p.hairline))
         .child(chrome::status_bar(s));
-    rune_kit::root(page, Vec::new())
+    rune_kit::root(page, layer)
 }

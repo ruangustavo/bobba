@@ -1,11 +1,18 @@
 use rune::tok::TextStyle;
-use rune::{Color, El, FileDialogOptions, ScrollSpec, Tx, col, el, row, text};
-use rune_kit::{Badge, BadgeVariant, Button, ButtonVariant};
+use rune::{Color, El, FileDialogOptions, Tx, col, el, row, text};
+use rune_kit::{
+    Badge, BadgeVariant, Button, ButtonVariant, ControlSize, IconButton, IconButtonVariant,
+};
 
 use crate::backend::Command;
 use crate::state::App;
-use crate::view::skull::skull;
 use crate::view::theme::{Paint, paint};
+
+static PLAY: rune::Icon = rune::Icon {
+    name: "bobba-play",
+    view: 16.0,
+    body: r#"<path d="M4.75 3.5L12.55 8L4.75 12.5Z" fill="currentColor" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round"/>"#,
+};
 
 fn install(_: &mut App, tx: &mut Tx) {
     let options = FileDialogOptions {
@@ -20,7 +27,7 @@ fn install(_: &mut App, tx: &mut Tx) {
     });
 }
 
-fn card(p: &Paint, key: String, title: String, detail: String, badge: El, actions: Vec<El>) -> El {
+fn item(p: &Paint, key: String, title: String, detail: String, badge: El, actions: Vec<El>) -> El {
     let k = &p.kit;
     row()
         .key(key)
@@ -28,9 +35,6 @@ fn card(p: &Paint, key: String, title: String, detail: String, badge: El, action
         .padding(14.0)
         .gap(12.0)
         .center_y()
-        .radius(12.0)
-        .fill(p.panel)
-        .border(1.0, p.hairline)
         .child(
             col()
                 .gap(3.0)
@@ -68,25 +72,33 @@ pub fn view(s: &App) -> El {
         || "The extension port is not open yet.".to_owned(),
         |port| format!("Extensions in any language connect on port {port}."),
     );
-    let mut list = col()
-        .key("extension-list")
-        .gap(8.0)
-        .child(card(
+    let mut items = vec![
+        item(
             p,
             "ext-logger".into(),
             "Logger".into(),
             "Shows every packet after extensions decide, never slows traffic".into(),
             badge("built-in", BadgeVariant::Subtle),
-            vec![],
-        ))
-        .child(card(
+            vec![
+                IconButton::new(&PLAY)
+                    .variant(IconButtonVariant::Ghost)
+                    .control_size(ControlSize::Large)
+                    .label("Open Logger")
+                    .help("Open the Logger in its own window")
+                    .on_press(App::open_logger)
+                    .build(k)
+                    .key("ext-logger-open"),
+            ],
+        ),
+        item(
             p,
             "ext-injection".into(),
             "Injection".into(),
             "Sends packet expressions to the client or the server".into(),
             badge("built-in", BadgeVariant::Subtle),
             vec![],
-        ));
+        ),
+    ];
     for state in &s.installed {
         let connected = s
             .extensions
@@ -118,7 +130,7 @@ pub fn view(s: &App) -> El {
             .variant(ButtonVariant::GhostMuted)
             .on_press(move |s: &mut App| s.send(Command::UninstallExtension(file.clone())))
             .build(k);
-        list = list.child(card(
+        items.push(item(
             p,
             format!("installed-{}", state.file_name),
             title,
@@ -128,7 +140,7 @@ pub fn view(s: &App) -> El {
         ));
     }
     for (_, info) in s.extensions.iter().filter(|(_, info)| info.file.is_none()) {
-        list = list.child(card(
+        items.push(item(
             p,
             format!("manual-{}", info.title),
             info.title.clone(),
@@ -140,40 +152,27 @@ pub fn view(s: &App) -> El {
             vec![],
         ));
     }
-    let console = s.console.iter().fold(col().gap(3.0), |lines, line| {
-        lines.child(
-            text(line.clone())
-                .font(k.ty.mono)
-                .color(k.c.text_muted)
-                .wrap_anywhere(),
-        )
-    });
-    let console_panel = if s.console.is_empty() {
+    let list = items.into_iter().enumerate().fold(
         col()
-            .key("extension-console")
+            .key("extension-list")
             .w_full()
-            .grow(1.0)
-            .min_h(0.0)
-            .center()
-            .gap(10.0)
-            .child(skull(3.0, k.c.text_faint))
-            .child(
-                text("Extension output shows up here")
-                    .font(k.ty.small)
-                    .color(k.c.text_faint),
-            )
-    } else {
-        col()
-            .key("extension-console")
-            .w_full()
-            .grow(1.0)
-            .min_h(0.0)
-            .padding(14.0)
             .radius(12.0)
             .fill(p.panel)
-            .scroll(ScrollSpec { stick_bottom: true })
-            .child(console)
-    };
+            .border(1.0, p.hairline),
+        |list, (i, item)| {
+            let list = if i == 0 {
+                list
+            } else {
+                list.child(
+                    el().key(format!("extension-divider-{}", i - 1))
+                        .w_full()
+                        .h(1.0)
+                        .fill(p.hairline),
+                )
+            };
+            list.child(item)
+        },
+    );
     col()
         .key("extensions")
         .w_full()
@@ -197,7 +196,7 @@ pub fn view(s: &App) -> El {
                         .child(text(port).font(k.ty.body).color(k.c.text_muted)),
                 )
                 .child(
-                    Button::new("Install…")
+                    Button::new("Install")
                         .variant(ButtonVariant::Contrast)
                         .on_press_tx(install)
                         .build(k)
@@ -205,5 +204,4 @@ pub fn view(s: &App) -> El {
                 ),
         )
         .child(list)
-        .child(console_panel)
 }

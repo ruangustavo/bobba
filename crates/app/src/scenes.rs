@@ -39,8 +39,6 @@ pub const SCENES: &[Scene] = &[
         s.phase = Phase::Failed("Could not find Habbo's encryption key".into())
     }),
     ("manual", |s| s.mode = Mode::Manual),
-    ("logger", logger),
-    ("logger-selected", logger_selected),
     ("injection", injection),
     ("extensions", extensions),
     ("permission", permission),
@@ -157,7 +155,7 @@ fn connected(s: &mut App) {
         elapsed: Duration::from_millis(2),
     };
     let info = packet_info();
-    s.log.set_packet_info(info.clone());
+    s.feed.log_mut().set_packet_info(info.clone());
     s.packet_info = Some(info);
     s.handle(crate::backend::UiEvent::Log(traffic()));
     s.traffic = Traffic {
@@ -171,24 +169,24 @@ fn connected(s: &mut App) {
     ];
 }
 
-fn logger(s: &mut App) {
-    connected(s);
-    s.tab = Tab::Logger;
-}
-
-fn logger_selected(s: &mut App) {
-    logger(s);
-    if let Some(number) = s.log.number_at(26) {
-        s.table.select(number.to_string());
-    }
-}
-
 fn injection(s: &mut App) {
     connected(s);
     s.tab = Tab::Injection;
     s.injection
         .replace_text("{out:Chat}{s:\"hello from Bobba\"}{i:0}{i:-1}");
     s.last_send = Some(crate::state::SendResult::Sent(Direction::ToServer));
+    let info = s.packet_info.clone();
+    for (direction, expression) in [
+        (Direction::ToServer, "{out:Chat}{s:\"oi\"}{i:0}{i:-1}"),
+        (
+            Direction::ToClient,
+            "{in:Chat}{i:7}{s:\"bobba\"}{i:0}{i:0}{i:-1}",
+        ),
+        (Direction::ToServer, "{out:MoveAvatar}{i:12}{i:8}"),
+        (Direction::ToServer, "{out:Shout}{s:\"alguém aí?\"}{i:0}"),
+    ] {
+        s.recent.remember(direction, expression, info.as_deref());
+    }
 }
 
 fn extension(title: &str, file: Option<&str>) -> ExtensionInfo {

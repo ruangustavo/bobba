@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 use bobba_protocol::expression::HeaderLabel;
-use bobba_protocol::prediction::predicted_expression;
+use bobba_protocol::prediction::{predict_structure, predicted_expression};
 use bobba_protocol::{Direction, Packet, PacketInfo};
 use bobba_session::{LogEntry, Outcome};
 
@@ -60,23 +60,119 @@ pub fn expression_for(packet: &Packet, direction: Direction, info: &PacketInfo) 
     predicted_expression(packet, label)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FieldKind {
+    Text,
+    Int,
+    Byte,
+    Bool,
+}
+
+impl FieldKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            FieldKind::Text => "string",
+            FieldKind::Int => "int",
+            FieldKind::Byte => "byte",
+            FieldKind::Bool => "bool",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Field {
+    pub kind: FieldKind,
+    pub value: String,
+}
+
+pub fn fields_of(packet: &Packet) -> Vec<Field> {
+    let mut reader = packet.reader();
+    let mut fields = Vec::new();
+    for code in predict_structure(packet).chars() {
+        let field = match code {
+            's' => reader.read_string().map(|text| Field {
+                kind: FieldKind::Text,
+                value: format!(
+                    "\"{}\"",
+                    text.replace('\\', "\\\\")
+                        .replace('"', "\\\"")
+                        .replace('\r', "\\r")
+                ),
+            }),
+            'i' => reader.read_i32().map(|n| Field {
+                kind: FieldKind::Int,
+                value: n.to_string(),
+            }),
+            'b' => reader.read_u8().map(|n| Field {
+                kind: FieldKind::Byte,
+                value: n.to_string(),
+            }),
+            'B' => reader.read_bool().map(|b| Field {
+                kind: FieldKind::Bool,
+                value: b.to_string(),
+            }),
+            _ => break,
+        };
+        match field {
+            Ok(field) => fields.push(field),
+            Err(_) => break,
+        }
+    }
+    fields
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Directions {
+    pub incoming: bool,
+    pub outgoing: bool,
+}
+
+impl Directions {
+    pub const ALL: Self = Self {
+        incoming: true,
+        outgoing: true,
+    };
+
+    pub fn shows(self, direction: Direction) -> bool {
+        match direction {
+            Direction::ToClient => self.incoming,
+            Direction::ToServer => self.outgoing,
+        }
+    }
+}
+
+impl Default for Directions {
+    fn default() -> Self {
+        Self::ALL
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Filter {
     text: String,
+    directions: Directions,
 }
 
 impl Filter {
     pub fn new(text: &str) -> Self {
         Self {
             text: text.trim().to_lowercase(),
+            directions: Directions::ALL,
         }
     }
 
+    pub fn directions(self, directions: Directions) -> Self {
+        Self { directions, ..self }
+    }
+
     pub fn is_empty(&self) -> bool {
-        self.text.is_empty()
+        self.text.is_empty() && self.directions == Directions::ALL
     }
 
     fn matches(&self, row: &LogRow, info: &PacketInfo) -> bool {
+        if !self.directions.shows(row.direction()) {
+            return false;
+        }
         if self.text.is_empty() {
             return true;
         }
@@ -257,6 +353,52 @@ mod tests {
         assert_eq!(
             log.row(0).map(LogRow::status).as_deref(),
             Some("Blocked · AntiSpam")
+        );
+    }
+
+    #[test]
+    fn filters_by_direction_together_with_the_text() {
+        let mut log = PacketLog::new(10);
+        let incoming = LogEntry::Intercepted {
+            index: 0,
+            direction: Direction::ToClient,
+            packet: Packet::builder(597).string("oi").build(),
+            outcome: Outcome::Forwarded,
+        };
+        log.push([
+            intercepted(597, Outcome::Forwarded),
+            incoming,
+            intercepted(10, Outcome::Forwarded),
+        ]);
+        let outgoing_only = Directions {
+            incoming: false,
+            outgoing: true,
+        };
+        log.set_filter(Filter::new("").directions(outgoing_only));
+        assert_eq!(log.len(), 2);
+        log.set_filter(Filter::new("597").directions(outgoing_only));
+        assert_eq!(log.len(), 1);
+        assert_eq!(log.row(0).map(LogRow::direction), Some(Direction::ToServer));
+    }
+
+    #[test]
+    fn fields_follow_the_predicted_structure_in_order() {
+        let packet = Packet::builder(597)
+            .string("say \"hi\"")
+            .i32(0)
+            .i32(-1)
+            .build();
+        let fields: Vec<(&str, String)> = fields_of(&packet)
+            .into_iter()
+            .map(|f| (f.kind.label(), f.value))
+            .collect();
+        assert_eq!(
+            fields,
+            [
+                ("string", r#""say \"hi\"""#.to_owned()),
+                ("int", "0".to_owned()),
+                ("int", "-1".to_owned()),
+            ]
         );
     }
 

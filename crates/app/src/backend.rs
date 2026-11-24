@@ -19,6 +19,8 @@ use tokio::net::TcpListener;
 use tokio::process::Child;
 use tokio::sync::mpsc;
 
+use crate::setup::Step;
+
 pub type Host = ExtensionHost<Sulek>;
 
 const EXTENSION_PORT_START: u16 = 9092;
@@ -72,7 +74,7 @@ pub enum Command {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AutomaticStep {
-    Working(String),
+    Working(Step),
     AwaitingApproval,
     NeedsPreparation(PathBuf),
     Prepared(PathBuf),
@@ -393,9 +395,9 @@ async fn connect(target: DirectTarget, host: Arc<Host>, ui: UiSink) {
 }
 
 async fn connect_automatically(host: Arc<Host>, ui: UiSink) {
-    let step = |text: &str| UiEvent::Automatic(AutomaticStep::Working(text.to_owned()));
+    let step = |step| UiEvent::Automatic(AutomaticStep::Working(step));
     let fail = |text: String| UiEvent::Automatic(AutomaticStep::Failed(text));
-    ui.emit(step("Checking the Habbo client"));
+    ui.emit(step(Step::Prepare));
     match client::client_state().await {
         ClientState::Ready(_) => {}
         ClientState::NotInstalled => {
@@ -409,7 +411,7 @@ async fn connect_automatically(host: Arc<Host>, ui: UiSink) {
             return;
         }
     }
-    ui.emit(step("Finding the hotels"));
+    ui.emit(step(Step::Allow));
     let redirects = resolve_hotels(&HOTEL_HOSTS).await;
     if redirects.is_empty() {
         ui.emit(fail(
@@ -449,9 +451,7 @@ async fn connect_automatically(host: Arc<Host>, ui: UiSink) {
 }
 
 async fn prepare_client(app: PathBuf, ui: UiSink) {
-    ui.emit(UiEvent::Automatic(AutomaticStep::Working(
-        "Re-signing Habbo.app".into(),
-    )));
+    ui.emit(UiEvent::Automatic(AutomaticStep::Working(Step::Prepare)));
     let event = match client::prepare(&app).await {
         Ok(original) => UiEvent::Automatic(AutomaticStep::Prepared(original)),
         Err(error) => UiEvent::Automatic(AutomaticStep::Failed(error.to_string())),

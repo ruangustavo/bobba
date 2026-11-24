@@ -7,13 +7,15 @@ use std::time::Duration;
 
 use bobba_extensions::{ExtensionId, HostEvent, Permission, PermissionRequest};
 use bobba_protocol::extension_message::ExtensionInfo;
-use bobba_protocol::{Direction, PacketInfo};
+use bobba_protocol::{Direction, Expression, PacketInfo};
 use bobba_session::{ConnectionInfo, KeyRecoveryFailure, LogEntry, SessionEvent, Upstream};
-use rune::TextEdit;
-use rune_kit::TableState;
+use rune::{TextEdit, WindowHandle};
 
 use crate::backend::{AutomaticStep, Backend, Command, DirectTarget, InstalledState, UiEvent};
-use crate::packet_log::{DEFAULT_CAPACITY, Filter, LogRow, PacketLog};
+use crate::log_feed::LogFeed;
+use crate::recent::{self, Recent};
+use crate::repeat::{Interval, Repeats};
+use crate::setup::{Progress, Step};
 
 const CONSOLE_LIMIT: usize = 500;
 pub const DEFAULT_HOTEL: &str = "game-br.habbo.com";
@@ -23,23 +25,16 @@ pub const INJECTION_NAME: &str = "Injection";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
     Connection,
-    Logger,
     Injection,
     Extensions,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 4] = [
-        Tab::Connection,
-        Tab::Logger,
-        Tab::Injection,
-        Tab::Extensions,
-    ];
+    pub const ALL: [Tab; 3] = [Tab::Connection, Tab::Injection, Tab::Extensions];
 
     pub fn label(self) -> &'static str {
         match self {
             Tab::Connection => "Connection",
-            Tab::Logger => "Logger",
             Tab::Injection => "Injection",
             Tab::Extensions => "Extensions",
         }
@@ -48,6 +43,12 @@ impl Tab {
     pub fn index(self) -> usize {
         Self::ALL.iter().position(|t| *t == self).unwrap_or(0)
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionField {
+    Hotel,
+    Client,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,6 +61,7 @@ pub enum Mode {
 pub enum Phase {
     Idle,
     Preparing(String),
+    Working(Step),
     NeedsResign(PathBuf),
     Prepared(PathBuf),
     AwaitingApproval,
@@ -67,6 +69,7 @@ pub enum Phase {
     Listening(SocketAddr),
     Connected(ConnectionInfo),
     Ended { packets: usize },
+    SetupFailed { at: Step, reason: String },
     Failed(String),
 }
 
@@ -75,6 +78,7 @@ impl Phase {
         matches!(
             self,
             Phase::Preparing(_)
+                | Phase::Working(_)
                 | Phase::AwaitingApproval
                 | Phase::WaitingForClient(_)
                 | Phase::Listening(_)
@@ -98,6 +102,33 @@ pub struct Traffic {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Draft {
+    Empty,
+    Broken(String),
+    Ready,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SendMode {
+    Once,
+    Repeat,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Target {
+    Named(Direction),
+    Raw(Direction),
+}
+
+impl Target {
+    pub fn direction(self) -> Direction {
+        match self {
+            Target::Named(direction) | Target::Raw(direction) => direction,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SendResult {
     Sent(Direction),
     Refused(String),
@@ -109,6 +140,7 @@ pub struct App {
     pub tab: Tab,
     pub mode: Mode,
     pub phase: Phase,
+    pub copied: Option<SessionField>,
     pub key: KeyState,
     pub packet_info: Option<Arc<PacketInfo>>,
     pub traffic: Traffic,
@@ -120,13 +152,16 @@ pub struct App {
     pub hotel_host: TextEdit,
     pub hotel_port: TextEdit,
     pub listen_port: TextEdit,
-    pub log: PacketLog,
-    pub table: TableState,
-    pub filter: TextEdit,
-    pub follow: bool,
-    pub paused: bool,
+    pub feed: LogFeed,
+    logger: Option<WindowHandle>,
     pub injection: TextEdit,
     pub last_send: Option<SendResult>,
+    pub recent: Recent,
+    pub recent_open: bool,
+    pub send_mode: SendMode,
+    pub every: Interval,
+    pub raw_direction: Direction,
+    pub repeats: Repeats,
 }
 
 impl App {
@@ -137,6 +172,7 @@ impl App {
             tab: Tab::Connection,
             mode: Mode::Automatic,
             phase: Phase::Idle,
+            copied: None,
             key: KeyState::Plain,
             packet_info: None,
             traffic: Traffic::default(),
@@ -148,13 +184,16 @@ impl App {
             hotel_host: TextEdit::new(DEFAULT_HOTEL),
             hotel_port: TextEdit::new(DEFAULT_GAME_PORT),
             listen_port: TextEdit::new(DEFAULT_GAME_PORT),
-            log: PacketLog::new(DEFAULT_CAPACITY),
-            table: TableState::new().key("packets"),
-            filter: TextEdit::new(""),
-            follow: true,
-            paused: false,
+            feed: LogFeed::new(),
+            logger: None,
             injection: TextEdit::new(""),
             last_send: None,
+            recent: Recent::default(),
+            recent_open: false,
+            send_mode: SendMode::Once,
+            every: Interval::default(),
+            raw_direction: Direction::ToServer,
+            repeats: Repeats::default(),
         }
     }
 
@@ -206,12 +245,15 @@ impl App {
 
     fn handle_step(&mut self, step: AutomaticStep) {
         self.phase = match step {
-            AutomaticStep::Working(text) => Phase::Preparing(text),
+            AutomaticStep::Working(step) => Phase::Working(step),
             AutomaticStep::AwaitingApproval => Phase::AwaitingApproval,
             AutomaticStep::NeedsPreparation(app) => Phase::NeedsResign(app),
             AutomaticStep::Prepared(original) => Phase::Prepared(original),
             AutomaticStep::WaitingForClient(hotels) => Phase::WaitingForClient(hotels),
-            AutomaticStep::Failed(reason) => Phase::Failed(reason),
+            AutomaticStep::Failed(reason) => Phase::SetupFailed {
+                at: Progress::of(&self.phase).step().unwrap_or(Step::Prepare),
+                reason,
+            },
         };
     }
 
@@ -219,6 +261,7 @@ impl App {
         match event {
             SessionEvent::Connected(info) => {
                 self.phase = Phase::Connected(info);
+                self.copied = None;
                 self.traffic = Traffic::default();
                 self.key = KeyState::Plain;
             }
@@ -239,9 +282,10 @@ impl App {
             }
             SessionEvent::Ended => {
                 self.key = KeyState::Plain;
+                self.repeats.pause_all();
                 if matches!(self.phase, Phase::Connected(_)) {
                     self.phase = Phase::Ended {
-                        packets: self.log.total(),
+                        packets: self.feed.log().total(),
                     };
                 } else if !matches!(self.phase, Phase::Failed(_)) {
                     self.phase = Phase::Idle;
@@ -257,9 +301,7 @@ impl App {
                 Direction::ToClient => self.traffic.to_client += 1,
             }
         }
-        if !self.paused {
-            self.log.push(entries);
-        }
+        self.feed.record(entries);
     }
 
     fn handle_host(&mut self, event: HostEvent) {
@@ -271,7 +313,7 @@ impl App {
                 self.log_console(format!("[{title}] {text}"));
             }
             HostEvent::PacketInfoLoaded(info) => {
-                self.log.set_packet_info(info.clone());
+                self.feed.log_mut().set_packet_info(info.clone());
                 self.packet_info = Some(info);
             }
             HostEvent::InterceptTimedOut {
@@ -305,7 +347,7 @@ impl App {
     pub fn connect(&mut self) {
         match self.mode {
             Mode::Automatic => {
-                self.phase = Phase::Preparing("Starting".into());
+                self.phase = Phase::Working(Step::Prepare);
                 self.send(Command::ConnectAutomatically);
             }
             Mode::Manual => {
@@ -344,7 +386,7 @@ impl App {
     }
 
     pub fn resign(&mut self, app: PathBuf) {
-        self.phase = Phase::Preparing("Re-signing Habbo.app".into());
+        self.phase = Phase::Working(Step::Prepare);
         self.send(Command::PrepareClient(app));
     }
 
@@ -354,18 +396,19 @@ impl App {
         }
     }
 
-    pub fn set_filter(&mut self) {
-        self.log.set_filter(Filter::new(&self.filter.text));
+    pub fn open_logger(&mut self) {
+        match &self.logger {
+            Some(window) if window.is_ready() => window.focus(),
+            _ => self.logger = Some(crate::logger::open(&self.feed)),
+        }
     }
 
-    pub fn clear_log(&mut self) {
-        self.log.clear();
-        self.table.clear_selection();
-    }
-
-    pub fn selected_row(&self) -> Option<&LogRow> {
-        let number: u64 = self.table.cursor()?.parse().ok()?;
-        self.log.row_by_number(number)
+    pub fn take_logger_requests(&mut self) -> bool {
+        let Some(expression) = self.feed.take_injection() else {
+            return false;
+        };
+        self.use_in_injection(expression);
+        true
     }
 
     pub fn use_in_injection(&mut self, expression: String) {
@@ -374,34 +417,117 @@ impl App {
         self.tab = Tab::Injection;
     }
 
-    pub fn send_injection(&mut self, direction: Direction) {
+    pub fn draft(&self) -> Draft {
+        let text = self.injection.text.trim();
+        if text.is_empty() {
+            return Draft::Empty;
+        }
+        let empty = PacketInfo::empty("");
+        let info = self.packet_info.as_deref().unwrap_or(&empty);
+        match Expression::parse(text).and_then(|expression| expression.resolve(info)) {
+            Ok(_) => Draft::Ready,
+            Err(error) => Draft::Broken(error.to_string()),
+        }
+    }
+
+    pub fn target(&self) -> Option<Target> {
+        if self.draft() != Draft::Ready {
+            return None;
+        }
+        let expression = Expression::parse(self.injection.text.trim()).ok()?;
+        Some(match expression.direction() {
+            Some(direction) => Target::Named(direction),
+            None => Target::Raw(self.raw_direction),
+        })
+    }
+
+    fn deliver(&self, direction: Direction, expression: &str) -> Result<(), String> {
         let Some(backend) = &self.backend else {
-            self.last_send = Some(SendResult::Refused("not connected to a hotel".into()));
+            return Err("not connected to a hotel".into());
+        };
+        backend
+            .host
+            .send_expression(INJECTION_NAME, direction, expression)
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn send_injection(&mut self) {
+        let Some(target) = self.target() else {
             return;
         };
-        self.last_send = Some(
-            match backend.host.send_expression(
-                INJECTION_NAME,
-                direction,
-                self.injection.text.trim(),
-            ) {
-                Ok(()) => SendResult::Sent(direction),
-                Err(error) => SendResult::Refused(error.to_string()),
-            },
-        );
+        let direction = target.direction();
+        let expression = self.injection.text.trim().to_owned();
+        self.last_send = Some(match self.deliver(direction, &expression) {
+            Ok(()) => {
+                self.recent
+                    .remember(direction, &expression, self.packet_info.as_deref());
+                SendResult::Sent(direction)
+            }
+            Err(reason) => SendResult::Refused(reason),
+        });
+    }
+
+    pub fn start_repeat(&mut self, now: f64) {
+        let Some(target) = self.target() else {
+            return;
+        };
+        let direction = target.direction();
+        let expression = self.injection.text.trim().to_owned();
+        let label = recent::label(direction, &expression, self.packet_info.as_deref());
+        self.recent
+            .remember(direction, &expression, self.packet_info.as_deref());
+        self.repeats
+            .start(label, expression, direction, self.every, now);
+        self.last_send = None;
+        self.fire_repeats(now);
+    }
+
+    pub fn fire_repeats(&mut self, now: f64) -> bool {
+        let due = self.repeats.due(now);
+        let fired = !due.is_empty();
+        for packet in due {
+            match self.deliver(packet.direction, &packet.expression) {
+                Ok(()) => self.repeats.sent(packet.id),
+                Err(reason) => self.repeats.stop(packet.id, reason),
+            }
+        }
+        fired
+    }
+
+    pub fn toggle_repeat(&mut self, id: u64, now: f64) {
+        self.repeats.toggle(id, now);
+        self.fire_repeats(now);
+    }
+
+    pub fn edit_repeat(&mut self, id: u64) {
+        if let Some(repeat) = self.repeats.get(id) {
+            let expression = repeat.expression.clone();
+            self.injection.replace_text(expression);
+            self.last_send = None;
+        }
+    }
+
+    pub fn use_recent(&mut self, expression: String) {
+        self.injection.replace_text(expression);
+        self.last_send = None;
+        self.recent_open = false;
     }
 
     pub fn status_line(&self) -> String {
         match &self.phase {
             Phase::Idle => "Not connected".into(),
             Phase::Preparing(text) => text.clone(),
+            Phase::Working(Step::Prepare) => "Preparing Habbo".into(),
+            Phase::Working(Step::Allow) => "Getting permission".into(),
+            Phase::Working(Step::Open) => "Waiting for Habbo".into(),
             Phase::NeedsResign(_) => "Action needed".into(),
             Phase::Prepared(_) => "Client ready".into(),
             Phase::AwaitingApproval => "Waiting for approval".into(),
             Phase::WaitingForClient(_) => "Waiting for Habbo".into(),
             Phase::Listening(address) => format!("Listening on {address}"),
-            Phase::Connected(info) => format!("Connected · {}", info.hotel_version),
+            Phase::Connected(_) => "Connected".into(),
             Phase::Ended { .. } => "Session ended".into(),
+            Phase::SetupFailed { .. } => "Setup stopped".into(),
             Phase::Failed(_) => "Connection failed".into(),
         }
     }

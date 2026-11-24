@@ -3,7 +3,7 @@ use rune::tok::TextStyle;
 use rune::{Color, Cx, El, el, row, text};
 use rune_kit::{Button, ButtonVariant, SegmentedControl};
 
-use crate::state::{App, KeyState, Phase, Tab};
+use crate::state::{App, Phase, Tab};
 use crate::view::skull::skull;
 use crate::view::theme::{Paint, paint};
 
@@ -12,7 +12,7 @@ pub const TITLEBAR_HEIGHT: f32 = 52.0;
 fn status_color(p: &Paint, phase: &Phase) -> Color {
     match phase {
         Phase::Connected(_) => p.green,
-        Phase::Failed(_) => p.red,
+        Phase::Failed(_) | Phase::SetupFailed { .. } => p.red,
         Phase::Idle | Phase::Ended { .. } => p.kit.c.text_faint,
         _ => p.amber,
     }
@@ -134,10 +134,6 @@ pub fn status_bar(s: &App) -> El {
     let p = paint();
     let k = &p.kit;
     let item = |label: String, ink: Color| text(label).font(k.ty.small).color(ink);
-    let encryption = match s.key {
-        KeyState::Plain => item("plain".into(), k.c.text_faint),
-        KeyState::Decrypted { .. } => item("RC4 decrypted".into(), p.green),
-    };
     let port = s
         .extension_port
         .map_or_else(|| "—".to_owned(), |port| port.to_string());
@@ -150,7 +146,6 @@ pub fn status_bar(s: &App) -> El {
         .center_y()
         .child(item(format!("↑ {}", s.traffic.to_server), k.c.text_muted).key("traffic-out"))
         .child(item(format!("↓ {}", s.traffic.to_client), k.c.text_muted).key("traffic-in"))
-        .child(encryption)
         .child(el().grow(1.0))
         .child(item(
             format!("{} extensions · port {port}", s.extensions.len()),
