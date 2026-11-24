@@ -7,7 +7,7 @@ impl Rng {
         Self(seed.max(1))
     }
 
-    pub fn next(&mut self) -> u64 {
+    pub fn next_u64(&mut self) -> u64 {
         self.0 ^= self.0 << 13;
         self.0 ^= self.0 >> 7;
         self.0 ^= self.0 << 17;
@@ -15,7 +15,7 @@ impl Rng {
     }
 
     pub fn below(&mut self, bound: u64) -> u64 {
-        self.next() % bound
+        self.next_u64() % bound
     }
 }
 
