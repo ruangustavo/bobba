@@ -91,10 +91,7 @@ async fn installed_extension_connects_with_its_cookie_and_no_prompt() {
             break info;
         }
     };
-    assert_eq!(
-        connected.file.as_deref(),
-        Some(installed.file_name.as_str())
-    );
+    assert_eq!(connected.file.as_deref(), Some(installed.id()));
     assert!(
         w.permissions.try_recv().is_err(),
         "installed extensions are not prompted"

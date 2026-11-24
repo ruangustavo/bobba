@@ -5,8 +5,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bobba_extensions::{
-    ExtensionHost, ExtensionOutput, HostConfig, HostEvent, Installer, PermissionRequest, Runtime,
-    launch, serve,
+    ExtensionHost, ExtensionOutput, HostConfig, HostEvent, InstalledExtension, Installer,
+    PermissionRequest, Runtime, launch, serve,
 };
 use bobba_intercept::client::{self, ClientState};
 use bobba_intercept::{HOTEL_HOSTS, HostsRedirect, HotelListeners, MemoryScan, resolve_hotels};
@@ -84,9 +84,27 @@ pub enum AutomaticStep {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstalledState {
-    pub file_name: String,
-    pub runtime: Runtime,
+    pub id: String,
+    pub kind: InstalledKind,
     pub running: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InstalledKind {
+    Single(Runtime),
+    Package { title: String, version: String },
+}
+
+impl InstalledKind {
+    fn of(extension: &InstalledExtension) -> Self {
+        match extension {
+            InstalledExtension::Single(single) => InstalledKind::Single(single.runtime),
+            InstalledExtension::Package(package) => InstalledKind::Package {
+                title: package.title.clone(),
+                version: package.version.clone(),
+            },
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -242,7 +260,7 @@ async fn run(
         running: HashMap::new(),
     };
     for installed in runner.installer.installed() {
-        runner.start(&installed.file_name, &ui).await;
+        runner.start(installed.id(), &ui).await;
     }
     runner.publish(&ui).await;
     let forward_ui = ui.clone();
@@ -281,7 +299,7 @@ async fn run(
                 tokio::spawn(prepare_client(app, ui.clone()));
             }
             Command::InstallExtension(path) => match runner.installer.install(&path) {
-                Ok(installed) => runner.start(&installed.file_name, &ui).await,
+                Ok(installed) => runner.start(installed.id(), &ui).await,
                 Err(error) => {
                     ui.emit(UiEvent::Notice(error.to_string()));
                 }
@@ -314,8 +332,8 @@ struct Runner {
 }
 
 impl Runner {
-    async fn start(&mut self, file_name: &str, ui: &UiSink) {
-        if self.is_running(file_name) {
+    async fn start(&mut self, id: &str, ui: &UiSink) {
+        if self.is_running(id) {
             return;
         }
         let Some(port) = self.port else { return };
@@ -323,18 +341,16 @@ impl Runner {
             .installer
             .installed()
             .into_iter()
-            .find(|e| e.file_name == file_name)
+            .find(|e| e.id() == id)
         else {
             return;
         };
         match launch(&installed, port, &self.host, self.output.clone()) {
             Ok(child) => {
-                self.running.insert(installed.file_name, child);
+                self.running.insert(installed.id().to_owned(), child);
             }
             Err(error) => {
-                ui.emit(UiEvent::Notice(format!(
-                    "could not start {file_name}: {error}"
-                )));
+                ui.emit(UiEvent::Notice(format!("could not start {id}: {error}")));
             }
         }
     }
@@ -356,9 +372,9 @@ impl Runner {
         let states = installed
             .into_iter()
             .map(|e| InstalledState {
-                running: self.is_running(&e.file_name),
-                file_name: e.file_name,
-                runtime: e.runtime,
+                running: self.is_running(e.id()),
+                kind: InstalledKind::of(&e),
+                id: e.id().to_owned(),
             })
             .collect();
         ui.emit(UiEvent::Installed(states));

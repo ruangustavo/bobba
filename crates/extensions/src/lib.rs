@@ -7,6 +7,7 @@ pub use host::{
     PermissionRequest, SendError,
 };
 pub use installer::{
-    ExtensionOutput, InstallError, InstalledExtension, Installer, Runtime, launch,
+    ExtensionOutput, InstallError, InstalledExtension, Installer, Package, Runtime, SingleFile,
+    launch,
 };
 pub use server::serve;

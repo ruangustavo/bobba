@@ -4,7 +4,7 @@ use rune_kit::{
     Badge, BadgeVariant, Button, ButtonVariant, ControlSize, IconButton, IconButtonVariant,
 };
 
-use crate::backend::Command;
+use crate::backend::{Command, InstalledKind};
 use crate::state::App;
 use crate::view::theme::{Paint, paint};
 
@@ -103,16 +103,22 @@ pub fn view(s: &App) -> El {
         let connected = s
             .extensions
             .iter()
-            .find(|(_, info)| info.file.as_deref() == Some(state.file_name.as_str()));
-        let title =
-            connected.map_or_else(|| state.file_name.clone(), |(_, info)| info.title.clone());
+            .find(|(_, info)| info.file.as_deref() == Some(state.id.as_str()));
+        let fallback = match &state.kind {
+            InstalledKind::Package { title, .. } => title.clone(),
+            InstalledKind::Single(_) => state.id.clone(),
+        };
+        let title = connected.map_or(fallback, |(_, info)| info.title.clone());
         let (status, status_color) = match (connected.is_some(), state.running) {
             (true, _) => ("connected", p.green),
             (false, true) => ("starting", p.amber),
             (false, false) => ("stopped", k.c.text_faint),
         };
-        let detail = format!("{:?} · {} · {}", state.runtime, status, state.file_name);
-        let file = state.file_name.clone();
+        let detail = match &state.kind {
+            InstalledKind::Single(runtime) => format!("{runtime:?} · {status} · {}", state.id),
+            InstalledKind::Package { version, .. } => format!("v{version} · {status}"),
+        };
+        let file = state.id.clone();
         let toggle = if state.running {
             let file = file.clone();
             Button::new("Stop")
@@ -132,7 +138,7 @@ pub fn view(s: &App) -> El {
             .build(k);
         items.push(item(
             p,
-            format!("installed-{}", state.file_name),
+            format!("installed-{}", state.id),
             title,
             detail,
             dot(status_color),

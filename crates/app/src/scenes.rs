@@ -7,7 +7,7 @@ use bobba_protocol::extension_message::ExtensionInfo;
 use bobba_protocol::{Direction, Packet, PacketInfo, PacketInfoEntry};
 use bobba_session::{ConnectionInfo, LogEntry, Outcome};
 
-use crate::backend::InstalledState;
+use crate::backend::{InstalledKind, InstalledState};
 use crate::state::{App, KeyState, Mode, Phase, Tab, Traffic};
 
 const RELEASE: &str = "MAC63-202611201617-213322612";
@@ -208,13 +208,13 @@ fn extensions(s: &mut App) {
     s.tab = Tab::Extensions;
     s.installed = vec![
         InstalledState {
-            file_name: "antispam-48120.py".into(),
-            runtime: Runtime::Python,
+            id: "antispam-48120.py".into(),
+            kind: InstalledKind::Single(Runtime::Python),
             running: true,
         },
         InstalledState {
-            file_name: "wired-helper-90314.jar".into(),
-            runtime: Runtime::Java,
+            id: "wired-helper-90314.jar".into(),
+            kind: InstalledKind::Single(Runtime::Java),
             running: false,
         },
     ];
