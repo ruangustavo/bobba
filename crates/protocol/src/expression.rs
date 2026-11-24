@@ -89,13 +89,13 @@ fn frame_with_length(content: &[u8]) -> Result<Packet, ExpressionError> {
 
 fn parse_named_header(chars: &[char]) -> Option<(Direction, String, usize)> {
     let text: String = chars.iter().take(256).collect();
-    let (direction, rest) = if let Some(rest) = text.strip_prefix("{in:") {
-        (Direction::ToClient, rest)
-    } else if let Some(rest) = text.strip_prefix("{out:") {
-        (Direction::ToServer, rest)
-    } else {
-        return None;
-    };
+    let (direction, rest) = [Direction::ToClient, Direction::ToServer]
+        .into_iter()
+        .find_map(|direction| {
+            let prefix = format!("{{{}:", direction.expression_prefix());
+            text.strip_prefix(prefix.as_str())
+                .map(|rest| (direction, rest))
+        })?;
     let close = rest.find('}')?;
     let identifier = &rest[..close];
     if identifier.contains([':', '{']) {
