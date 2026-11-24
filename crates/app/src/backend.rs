@@ -699,7 +699,7 @@ async fn connect_automatically(host: Arc<Host>, ui: UiSink) {
     let fail = |text: String| UiEvent::Automatic(AutomaticStep::Failed(text));
     ui.emit(step(Step::Prepare));
     match client::client_state().await {
-        ClientState::Ready(_) => {}
+        ClientState::Ready => {}
         ClientState::NotInstalled => {
             ui.emit(fail(
                 "Install the Habbo Launcher and open Habbo once, then try again".into(),

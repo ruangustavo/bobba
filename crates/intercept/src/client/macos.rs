@@ -2,30 +2,13 @@ use std::path::{Path, PathBuf};
 
 use tokio::process::Command;
 
+use super::{ClientState, PrepareError};
+
 const ENTITLEMENTS: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict><key>com.apple.security.get-task-allow</key><true/></dict></plist>
 "#;
 const ORIGINAL_SUFFIX: &str = "bobba-original";
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ClientState {
-    NotInstalled,
-    NeedsPreparation(PathBuf),
-    Ready(PathBuf),
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum PrepareError {
-    #[error("Habbo is running; quit it before preparing the client")]
-    Running,
-    #[error("codesign failed: {0}")]
-    Codesign(String),
-    #[error(
-        "macOS blocked changing Habbo.app; allow Bobba under System Settings › Privacy & Security › App Management ({0})"
-    )]
-    Blocked(String),
-}
 
 pub fn launcher_air_dir() -> Option<PathBuf> {
     Some(dirs::home_dir()?.join("Library/Application Support/Habbo Launcher/downloads/air"))
@@ -79,7 +62,7 @@ pub async fn client_state() -> ClientState {
     let entitlements = codesign_output(&["-d", "--entitlements", "-", "--xml"], &app).await;
     let details = codesign_output(&["-dv", "--verbose=4"], &app).await;
     if is_prepared(&entitlements, &details) {
-        ClientState::Ready(app)
+        ClientState::Ready
     } else {
         ClientState::NeedsPreparation(app)
     }
