@@ -17,7 +17,9 @@ use crate::recent::{self, Recent};
 use crate::repeat::{Interval, Repeats};
 use crate::setup::{Progress, Step};
 
-use crate::store::{CatalogState, Showing, StoreState};
+use crate::store::{CatalogState, StoreState};
+use crate::store_feed::{StoreEvent, StoreFeed, StoreRequest};
+use crate::store_window::StoreWindow;
 
 const CONSOLE_LIMIT: usize = 500;
 pub const DEFAULT_HOTEL: &str = "game-br.habbo.com";
@@ -175,6 +177,8 @@ pub struct App {
     pub raw_direction: Direction,
     pub repeats: Repeats,
     pub store: StoreState,
+    pub store_feed: StoreFeed,
+    store_window: Option<WindowHandle>,
     pub gearth: GEarthOffer,
 }
 
@@ -211,6 +215,8 @@ impl App {
             raw_direction: Direction::ToServer,
             repeats: Repeats::default(),
             store: StoreState::default(),
+            store_feed: StoreFeed::new(),
+            store_window: None,
             gearth: GEarthOffer::None,
         }
     }
@@ -230,8 +236,8 @@ impl App {
         };
         let mut changed = false;
         while let Ok(event) = events.try_recv() {
+            changed |= !matches!(event, UiEvent::StoreIcon { .. });
             self.handle(event);
-            changed = true;
         }
         self.events = Some(events);
         changed
@@ -262,7 +268,11 @@ impl App {
             UiEvent::Log(entries) => self.record(entries),
             UiEvent::Host(event) => self.handle_host(event),
             UiEvent::Permission(request) => self.permission_requests.push_back(request),
-            UiEvent::Installed(states) => self.installed = states,
+            UiEvent::Installed(states) => {
+                self.store_feed
+                    .publish(StoreEvent::Installed(states.clone()));
+                self.installed = states;
+            }
             UiEvent::ExtensionOutput(output) => {
                 self.log_console(format!("[{}] {}", output.file_name, output.line));
                 self.last_output.insert(output.file_name, output.line);
@@ -270,9 +280,26 @@ impl App {
             UiEvent::Notice(text) => self.log_console(text),
             UiEvent::Automatic(step) => self.handle_step(step),
             UiEvent::Failed(reason) => self.phase = Phase::Failed(reason),
-            UiEvent::Catalog(event) => self.store.handle_catalog(event),
-            UiEvent::MissingRuntimes(missing) => self.store.handle_missing(missing),
-            UiEvent::StoreInstall { title, progress } => self.store.handle_install(title, progress),
+            UiEvent::Catalog(event) => {
+                self.store_feed.publish(StoreEvent::Catalog(event.clone()));
+                self.store.handle_catalog(event);
+            }
+            UiEvent::MissingRuntimes(missing) => {
+                self.store_feed
+                    .publish(StoreEvent::MissingRuntimes(missing.clone()));
+                self.store.handle_missing(missing);
+            }
+            UiEvent::StoreIcon { title, icon } => {
+                let pixels = self.store.handle_icon(title.clone(), icon);
+                self.store_feed.publish(StoreEvent::Icon { title, pixels });
+            }
+            UiEvent::StoreInstall { title, progress } => {
+                self.store_feed.publish(StoreEvent::Install {
+                    title: title.clone(),
+                    progress: progress.clone(),
+                });
+                self.store.handle_install(title, progress);
+            }
             UiEvent::GEarthFound { folder, count } => {
                 if self.gearth == GEarthOffer::None {
                     self.gearth = GEarthOffer::Found { folder, count };
@@ -441,12 +468,42 @@ impl App {
         }
     }
 
-    pub fn show(&mut self, showing: Showing) {
-        self.store.showing = showing;
-        if showing == Showing::Store {
-            self.load_store();
-            self.check_runtimes();
+    pub fn open_store(&mut self) {
+        self.load_store();
+        self.check_runtimes();
+        match &self.store_window {
+            Some(window) if window.is_ready() => window.focus(),
+            _ => {
+                self.store_feed.restart();
+                self.store_window = Some(crate::store_window::open(self.store_window_state()));
+            }
         }
+    }
+
+    pub fn open_store_at(&mut self, title: String) {
+        self.open_store();
+        self.store_feed.publish(StoreEvent::Show(title));
+    }
+
+    pub fn store_window_state(&self) -> StoreWindow {
+        StoreWindow::new(
+            self.store_feed.clone(),
+            self.store.clone(),
+            self.installed.clone(),
+        )
+    }
+
+    pub fn take_store_requests(&mut self) -> bool {
+        let requests = self.store_feed.take_requests();
+        let any = !requests.is_empty();
+        for request in requests {
+            match request {
+                StoreRequest::LoadCatalog => self.load_store(),
+                StoreRequest::CheckRuntimes => self.check_runtimes(),
+                StoreRequest::Install(title) => self.install_from_store(title),
+            }
+        }
+        any
     }
 
     pub fn check_runtimes(&self) {
@@ -465,14 +522,6 @@ impl App {
     pub fn import_from_gearth(&mut self, folder: PathBuf) {
         self.gearth = GEarthOffer::Importing;
         self.send(Command::ImportFromGEarth(folder));
-    }
-
-    pub fn toggle_store_detail(&mut self, title: &str) {
-        self.store.detail = if self.store.detail.as_deref() == Some(title) {
-            None
-        } else {
-            Some(title.to_owned())
-        };
     }
 
     pub fn install_from_store(&mut self, title: String) {

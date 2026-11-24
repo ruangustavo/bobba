@@ -15,7 +15,7 @@ use bobba_protocol::extension_message::HostInfo;
 use bobba_session::{
     DirectProxy, DumpFile, LogEntry, NoTables, SessionEvent, SessionHandle, TableSource, Upstream,
 };
-use bobba_store::{Catalog, Listing, Origin, Runtime as StoreRuntime, Store, StoreError};
+use bobba_store::{Catalog, Icon, Listing, Origin, Runtime as StoreRuntime, Store, StoreError};
 use bobba_sulek::Sulek;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
@@ -29,6 +29,7 @@ const EXTENSION_PORT_ATTEMPTS: u16 = 100;
 const LOG_BATCH_INTERVAL: Duration = Duration::from_millis(33);
 const LOG_CHANNEL_CAPACITY: usize = 65_536;
 const INTERCEPT_TIMEOUT: Duration = Duration::from_secs(3);
+const ICON_FETCHES: usize = 8;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DirectTarget {
@@ -135,6 +136,10 @@ pub enum UiEvent {
     StoreInstall {
         title: String,
         progress: StoreInstall,
+    },
+    StoreIcon {
+        title: String,
+        icon: Icon,
     },
 }
 
@@ -417,6 +422,28 @@ struct Runner {
 }
 
 impl Runner {
+    fn fetch_icons(&self, catalog: &Catalog, ui: &UiSink) {
+        let titles: Vec<String> = catalog.listings.iter().map(|l| l.title.clone()).collect();
+        let store = self.store.clone();
+        let ui = ui.clone();
+        tokio::spawn(async move {
+            let limit = Arc::new(tokio::sync::Semaphore::new(ICON_FETCHES));
+            for title in titles {
+                let Ok(permit) = limit.clone().acquire_owned().await else {
+                    return;
+                };
+                let store = store.clone();
+                let ui = ui.clone();
+                tokio::spawn(async move {
+                    if let Some(icon) = store.icon(&title).await {
+                        ui.emit(UiEvent::StoreIcon { title, icon });
+                    }
+                    drop(permit);
+                });
+            }
+        });
+    }
+
     fn browse(&self) {
         let store = self.store.clone();
         let results = self.store_results.clone();
@@ -454,6 +481,7 @@ impl Runner {
         match result {
             StoreResult::Loaded(Ok((catalog, origin))) => {
                 self.catalog = Some(catalog.clone());
+                self.fetch_icons(&catalog, ui);
                 ui.emit(UiEvent::Catalog(CatalogEvent::Loaded { catalog, origin }));
                 self.check_runtimes(ui).await;
             }

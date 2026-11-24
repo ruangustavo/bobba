@@ -7,7 +7,9 @@ use bobba::logger::Logger;
 use bobba::scenes::{BREAKS, SCENES};
 use bobba::setup::Step;
 use bobba::state::{App, Phase, SendResult, Tab};
-use bobba::store::{CatalogState, Showing};
+use bobba::store::CatalogState;
+use bobba::store_feed::StoreRequest;
+use bobba::store_window::StoreWindow;
 use bobba::view::root;
 use bobba_extensions::{ExtensionOutput, HostEvent, Permission, PermissionRequest, ProcessStatus};
 use bobba_protocol::Direction;
@@ -16,6 +18,8 @@ use bobba_session::{KeyRecoveryFailure, SessionEvent, TablesUnavailable};
 use rune::{Env, Key, KeyEvent, Mods, Runtime};
 
 const SIZE: (f32, f32) = (1180.0, 760.0);
+const STORE_SIZE: (f32, f32) = (720.0, 520.0);
+const STORE_MIN_SIZE: (f32, f32) = (640.0, 440.0);
 
 fn runtime(scene: &str) -> Runtime<App> {
     let mut app = App::new();
@@ -456,27 +460,43 @@ fn extensions_tab_lists_extensions_without_their_output() {
     assert!(rt.find("extension-console").is_none());
 }
 
-#[test]
-fn the_store_opens_on_the_extensions_tab_and_asks_for_the_catalog() {
-    let mut rt = runtime("extensions");
-    assert!(shown(&rt, "install-from-file"));
-    press(&mut rt, "extensions-showing/segment1");
-    assert_eq!(rt.state.store.showing, Showing::Store);
-    assert_eq!(rt.state.store.catalog, CatalogState::Loading);
-    assert!(!shown(&rt, "install-from-file"));
+fn store_window_at(app: &App, size: (f32, f32)) -> Runtime<StoreWindow> {
+    let mut rt = Runtime::new(
+        app.store_window_state(),
+        bobba::view::store::root,
+        size,
+        Env::new(true, 2.0),
+    );
+    rt.on_key = Some(bobba::store_window::on_key);
+    rt.frame(0.0);
+    settle(&mut rt);
+    rt
+}
+
+fn store_window(app: &App) -> Runtime<StoreWindow> {
+    store_window_at(app, STORE_SIZE)
+}
+
+fn deliver(store: &mut Runtime<StoreWindow>) {
+    store.update(|s, tx| {
+        bobba::store_window::poll(s, 0.0, tx);
+    });
+    settle(store);
 }
 
 #[test]
-fn the_installed_and_store_switch_counts_each_side() {
-    let rt = runtime("store");
-    assert_eq!(text_of(&rt, "extensions-count-installed"), "4");
-    assert_eq!(text_of(&rt, "extensions-count-store"), "6");
-    assert!(!shows_text(&rt, "connect on port"));
+fn the_store_is_a_built_in_extension_that_asks_for_the_catalog() {
+    let mut rt = runtime("extensions");
+    assert!(shown(&rt, "ext-store-open"));
+    assert!(!shown(&rt, "extensions-showing"));
+    press(&mut rt, "ext-store-open");
+    assert_eq!(rt.state.store.catalog, CatalogState::Loading);
+    assert!(shown(&rt, "install-from-file"));
 }
 
 #[test]
 fn a_store_listing_opens_its_details_beside_the_list_and_escape_closes_them() {
-    let mut rt = runtime("store");
+    let mut rt = store_window(&runtime("store").state);
     assert!(shown(&rt, "store-row-Trade Ledger"));
     assert!(!shown(&rt, "store-detail"));
 
@@ -492,14 +512,14 @@ fn a_store_listing_opens_its_details_beside_the_list_and_escape_closes_them() {
         mods: Mods::default(),
     });
     settle(&mut rt);
-    assert_eq!(rt.state.store.detail, None);
+    assert_eq!(rt.state.detail, None);
     assert!(!shown(&rt, "store-detail"));
 }
 
 #[test]
 fn a_store_listing_shows_install_only_while_its_row_is_hovered() {
-    let mut rt = runtime("store");
-    let opacity = |rt: &Runtime<App>| {
+    let mut rt = store_window(&runtime("store").state);
+    let opacity = |rt: &Runtime<StoreWindow>| {
         rt.elements()
             .into_iter()
             .find(|e| e.key.as_deref() == Some("store-action-Trade Ledger") && !e.exiting)
@@ -520,38 +540,55 @@ fn a_store_listing_shows_install_only_while_its_row_is_hovered() {
 
 #[test]
 fn a_store_listing_shows_its_download_and_its_failure() {
-    let mut rt = runtime("store");
-    rt.update(|s, _| {
+    let mut app = runtime("store");
+    let mut store = store_window(&app.state);
+    app.update(|s, _| {
         s.handle(UiEvent::StoreInstall {
             title: "Trade Ledger".into(),
             progress: StoreInstall::Downloading,
         })
     });
-    settle(&mut rt);
-    assert!(shows_text(&rt, "Installing"));
+    deliver(&mut store);
+    assert!(shows_text(&store, "Installing"));
 
-    rt.update(|s, _| {
+    app.update(|s, _| {
         s.handle(UiEvent::StoreInstall {
             title: "Trade Ledger".into(),
             progress: StoreInstall::Failed("404 Not Found".into()),
         })
     });
-    settle(&mut rt);
-    assert!(shows_text(&rt, "404 Not Found"));
+    deliver(&mut store);
+    assert!(shows_text(&store, "404 Not Found"));
+}
+
+#[test]
+fn installing_from_the_store_window_asks_the_main_window() {
+    let app = runtime("store");
+    let mut store = store_window(&app.state);
+    press(&mut store, "store-action-Wired Helper");
+    assert_eq!(
+        app.state.store_feed.take_requests(),
+        [StoreRequest::Install("Wired Helper".into())]
+    );
 }
 
 #[test]
 fn an_unreachable_store_says_installed_extensions_keep_working() {
-    let mut rt = runtime("store");
-    rt.update(|s, _| {
+    let mut app = runtime("store");
+    let mut store = store_window(&app.state);
+    app.update(|s, _| {
         s.handle(UiEvent::Catalog(CatalogEvent::Unreachable(
             "offline".into(),
         )))
     });
-    settle(&mut rt);
-    assert!(shows_text(&rt, "keep working"));
-    press(&mut rt, "store-retry");
-    assert_eq!(rt.state.store.catalog, CatalogState::Loading);
+    deliver(&mut store);
+    assert!(shows_text(&store, "keep working"));
+    press(&mut store, "store-retry");
+    assert_eq!(store.state.store.catalog, CatalogState::Loading);
+    app.update(|s, _| {
+        s.take_store_requests();
+    });
+    assert_eq!(app.state.store.catalog, CatalogState::Loading);
 }
 
 #[test]
@@ -601,11 +638,12 @@ fn an_extension_row_offers_the_two_actions_of_its_state() {
 
 #[test]
 fn an_available_update_leads_to_the_listing_in_the_store() {
-    let mut rt = runtime("store");
-    press(&mut rt, "extensions-showing/segment0");
-    press(&mut rt, "installed-update-Wired Helper_1.3.0");
-    assert_eq!(rt.state.store.showing, Showing::Store);
-    assert_eq!(rt.state.store.detail.as_deref(), Some("Wired Helper"));
+    let mut app = runtime("store");
+    press(&mut app, "installed-update-Wired Helper_1.3.0");
+    let mut store = store_window(&app.state);
+    deliver(&mut store);
+    assert_eq!(store.state.detail.as_deref(), Some("Wired Helper"));
+    assert!(shown(&store, "store-detail"));
 }
 
 #[test]
@@ -633,18 +671,18 @@ fn an_extension_that_quits_on_its_own_says_why_and_can_start_again() {
 
 #[test]
 fn the_store_follows_the_runtimes_the_backend_finds() {
-    let mut rt = runtime("store");
-    assert!(shows_text(&rt, "Get Node.js"));
-    rt.update(|s, _| s.handle(UiEvent::MissingRuntimes(HashSet::new())));
-    settle(&mut rt);
-    assert!(!shows_text(&rt, "Get Node.js"));
-    assert!(!shows_text(&rt, "Needs Node.js"));
+    let mut app = runtime("store");
+    let mut store = store_window(&app.state);
+    assert!(shows_text(&store, "Get Node.js"));
+    app.update(|s, _| s.handle(UiEvent::MissingRuntimes(HashSet::new())));
+    deliver(&mut store);
+    assert!(!shows_text(&store, "Get Node.js"));
+    assert!(!shows_text(&store, "Needs Node.js"));
 }
 
 #[test]
 fn an_outdated_store_extension_offers_its_update_in_the_installed_list() {
-    let mut rt = runtime("store");
-    press(&mut rt, "extensions-showing/segment0");
+    let rt = runtime("store");
     assert!(shown(&rt, "installed-update-Wired Helper_1.3.0"));
 }
 
@@ -662,7 +700,7 @@ fn with_no_extensions_yet_the_list_points_to_the_store() {
         "the empty list offers the G-Earth import once"
     );
     press(&mut rt, "extensions-empty-browse");
-    assert_eq!(rt.state.store.showing, Showing::Store);
+    assert_eq!(rt.state.store.catalog, CatalogState::Loading);
 }
 
 fn gearth_found(rt: &mut Runtime<App>) {
@@ -710,13 +748,11 @@ fn importing_from_gearth_says_it_is_working_then_how_many_came() {
     );
 }
 
-const MIN_SIZE: (f32, f32) = (680.0, 480.0);
-
-fn store_break(case: &str) -> Runtime<App> {
-    store_break_at(case, SIZE)
+fn store_break(case: &str) -> Runtime<StoreWindow> {
+    store_break_at(case, STORE_SIZE)
 }
 
-fn store_break_at(case: &str, size: (f32, f32)) -> Runtime<App> {
+fn store_break_at(case: &str, size: (f32, f32)) -> Runtime<StoreWindow> {
     let mut app = App::new();
     if let Some((_, scene)) = SCENES.iter().find(|(name, _)| *name == "store") {
         scene(&mut app);
@@ -724,9 +760,10 @@ fn store_break_at(case: &str, size: (f32, f32)) -> Runtime<App> {
     let Some((_, _, apply)) = BREAKS.iter().find(|(_, name, _)| *name == case) else {
         panic!("{case} is a store break");
     };
-    apply(&mut app);
-    let mut rt = Runtime::new(app, root, size, Env::new(true, 2.0));
-    rt.on_key = Some(bobba::on_key);
+    let mut window = app.store_window_state();
+    apply(&mut window);
+    let mut rt = Runtime::new(window, bobba::view::store::root, size, Env::new(true, 2.0));
+    rt.on_key = Some(bobba::store_window::on_key);
     rt.frame(0.0);
     settle(&mut rt);
     rt
@@ -775,7 +812,7 @@ fn store_tiles_take_initials_from_the_letters_of_the_title() {
 
 #[test]
 fn a_store_row_cut_short_shows_the_rest_on_hover() {
-    let rt = store_break_at("Worst details", MIN_SIZE);
+    let rt = store_break_at("Worst details", STORE_MIN_SIZE);
     assert!(helps(&rt, "extension.zip"), "the failure reason");
     assert!(
         helps(&rt, "Konfiguration-und-Installation"),
@@ -831,7 +868,7 @@ fn rect_of<S: 'static>(rt: &Runtime<S>, key: &str) -> [f32; 4] {
 
 #[test]
 fn store_details_keep_the_title_and_actions_on_one_line_above_the_description() {
-    let mut rt = runtime("store");
+    let mut rt = store_window(&runtime("store").state);
     press(&mut rt, "store-row-Trade Ledger");
     let title = rect_of(&rt, "store-detail-title");
     let close = rect_of(&rt, "store-detail-close");
@@ -911,4 +948,58 @@ fn store_details_wrap_links_inside_the_panel() {
             "{case}: {starts:?} takes {lines} lines, so its link runs past the panel"
         );
     }
+}
+
+#[test]
+fn a_store_listing_shows_its_badge_once_it_arrives() {
+    let mut app = runtime("store");
+    let mut store = store_window(&app.state);
+    assert!(
+        texts_in(&store, "store-row-Trade Ledger")
+            .iter()
+            .any(|t| t == "TL")
+    );
+    assert!(!shown(&store, "store-icon-Trade Ledger"));
+
+    app.update(|s, _| {
+        s.handle(UiEvent::StoreIcon {
+            title: "Trade Ledger".into(),
+            icon: bobba_store::Icon {
+                rgba: vec![255; (bobba_store::ICON_SIDE * bobba_store::ICON_SIDE * 4) as usize],
+            },
+        })
+    });
+    deliver(&mut store);
+
+    assert!(shown(&store, "store-icon-Trade Ledger"));
+    assert!(
+        !texts_in(&store, "store-row-Trade Ledger")
+            .iter()
+            .any(|t| t == "TL")
+    );
+    assert!(
+        texts_in(&store, "store-row-Room Mapper")
+            .iter()
+            .any(|t| t == "RM")
+    );
+}
+
+#[test]
+fn store_categories_are_tabs_under_the_search() {
+    let mut store = store_window(&runtime("store").state);
+    assert!(!shown(&store, "store-chips"));
+    assert!(shown(&store, "store-category-All"));
+    assert!(shown(&store, "store-row-Room Mapper"));
+
+    press(&mut store, "store-category-Trading");
+    assert_eq!(store.state.category.as_deref(), Some("Trading"));
+    assert!(shown(&store, "store-row-Trade Ledger"));
+    assert!(!shown(&store, "store-row-Room Mapper"));
+
+    let search = rect_of(&store, "store-search");
+    let tab = rect_of(&store, "store-category-Trading");
+    assert!(
+        tab[1] >= search[1] + search[3],
+        "the tabs sit under the search"
+    );
 }

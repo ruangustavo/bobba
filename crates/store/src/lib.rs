@@ -1,10 +1,12 @@
 mod catalog;
+mod icon;
 mod runtime;
 
 use std::path::PathBuf;
 use std::time::Duration;
 
 pub use catalog::{Catalog, Category, Framework, Listing, Os, is_newer};
+pub use icon::{ICON_SIDE, Icon};
 pub use runtime::Runtime;
 
 pub const STORE_SOURCE: &str =
@@ -13,6 +15,7 @@ const CATALOG_TIMEOUT: Duration = Duration::from_secs(10);
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(120);
 const CONFIG_FILE: &str = "config.json";
 const EXTENSIONS_FILE: &str = "extensions.json";
+const ICONS_DIR: &str = "icons";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Origin {
@@ -110,6 +113,37 @@ impl Store {
         Ok(bytes.to_vec())
     }
 
+    pub async fn icon(&self, title: &str) -> Option<Icon> {
+        let name = encode_component(title);
+        let saved = self.cache_dir.join(ICONS_DIR).join(format!("{name}.png"));
+        let url = format!("{}/store/extensions/{name}/icon.png", self.base_url);
+        let fresh = self.fetch_bytes(&url).await;
+        if let Some(bytes) = fresh
+            && let Some(icon) = Icon::decode(&bytes)
+        {
+            if let Some(dir) = saved.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            let _ = std::fs::write(&saved, &bytes);
+            return Some(icon);
+        }
+        Icon::decode(&std::fs::read(&saved).ok()?)
+    }
+
+    async fn fetch_bytes(&self, url: &str) -> Option<Vec<u8>> {
+        let response = self
+            .http
+            .get(url)
+            .timeout(CATALOG_TIMEOUT)
+            .send()
+            .await
+            .ok()?;
+        if !response.status().is_success() {
+            return None;
+        }
+        Some(response.bytes().await.ok()?.to_vec())
+    }
+
     async fn fetch_text(&self, path: &str) -> Option<String> {
         let url = format!("{}/{path}", self.base_url);
         let response = self
@@ -172,10 +206,13 @@ mod tests {
                 let head = String::from_utf8_lossy(&request[..read]).to_string();
                 let path = head.split(' ').nth(1).unwrap_or_default().to_owned();
                 seen.lock().expect("lock").push(path.clone());
+                let badge = crate::icon::tests::badge_png(40);
                 let body: &[u8] = if path.ends_with("config.json") {
                     CONFIG.as_bytes()
                 } else if path.ends_with("extensions.json") {
                     EXTENSIONS.as_bytes()
+                } else if path.ends_with("icon.png") {
+                    &badge
                 } else {
                     b"PK-zip-bytes"
                 };
@@ -233,6 +270,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn fetches_the_icon_by_its_encoded_title_and_keeps_a_copy() {
+        let cache = tempfile::tempdir().expect("temp dir");
+        let (url, paths) = fake_store().await;
+
+        let online = Store::new(url, cache.path(), Os::Mac)
+            .icon("Room Mapper")
+            .await
+            .expect("fetches");
+        assert_eq!(
+            paths.lock().expect("lock").last().map(String::as_str),
+            Some("/store/extensions/Room%20Mapper/icon.png")
+        );
+
+        let offline = Store::new("http://127.0.0.1:9", cache.path(), Os::Mac)
+            .icon("Room Mapper")
+            .await
+            .expect("uses the saved copy");
+        assert_eq!(offline, online);
+    }
+
+    #[tokio::test]
+    async fn an_icon_never_fetched_is_missing_offline() {
+        let cache = tempfile::tempdir().expect("temp dir");
+        let store = Store::new("http://127.0.0.1:9", cache.path(), Os::Mac);
+        assert_eq!(store.icon("Room Mapper").await, None);
+    }
+
+    #[tokio::test]
     #[ignore = "hits raw.githubusercontent.com"]
     async fn real_store_lists_flash_extensions() {
         let cache = tempfile::tempdir().expect("temp dir");
@@ -245,5 +310,6 @@ mod tests {
         assert_eq!(qx.command[0], "/bin/sh");
         let archive = store.download("QX Scripter").await.expect("downloads");
         assert!(archive.starts_with(b"PK"));
+        assert!(store.icon("QX Scripter").await.is_some());
     }
 }

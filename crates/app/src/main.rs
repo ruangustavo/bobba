@@ -11,6 +11,7 @@ fn setup(s: &mut App, wake: Waker) {
         return;
     }
     s.feed.serve(wake.clone());
+    s.store_feed.serve(wake.clone());
     let (sink, events) = UiSink::new(wake);
     s.attach(Backend::spawn(sink), events);
     if let Some(target) = DirectTarget::from_args(std::env::args()) {

@@ -545,6 +545,7 @@ name = "bobba-store"
 version = "0.1.0"
 dependencies = [
  "dirs",
+ "png 0.18.1",
  "reqwest",
  "serde",
  "serde_json",

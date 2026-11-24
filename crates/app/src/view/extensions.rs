@@ -10,8 +10,6 @@ use bobba_extensions::{ExtensionId, ProcessStatus};
 
 use crate::backend::{Command, InstalledKind};
 use crate::state::{App, GEarthOffer};
-use crate::store::Showing;
-use crate::view::store;
 use crate::view::theme::{Paint, paint};
 
 static PLAY: rune::Icon = rune::Icon {
@@ -243,10 +241,7 @@ fn update_link(title: &str, version: &str, id: &str) -> El {
                 .font(p.kit.ty.small_medium)
                 .color(p.blue),
         )
-        .on_press(move |s: &mut App| {
-            s.show(Showing::Store);
-            s.store.detail = Some(title.clone());
-        })
+        .on_press(move |s: &mut App| s.open_store_at(title.clone()))
 }
 
 fn badge(label: &str, variant: BadgeVariant) -> El {
@@ -255,43 +250,6 @@ fn badge(label: &str, variant: BadgeVariant) -> El {
 
 fn dot(color: Color) -> El {
     el().size(7.0, 7.0).radius(3.5).fill(color)
-}
-
-fn showing_segment(s: &App, showing: Showing, count: Option<usize>) -> El {
-    let p = paint();
-    let k = &p.kit;
-    let on = s.store.showing == showing;
-    let (label, index, name) = match showing {
-        Showing::Installed => ("Installed", 0, "installed"),
-        Showing::Store => ("Store", 1, "store"),
-    };
-    let segment = row()
-        .key(format!("segment{index}"))
-        .role("tab")
-        .label(label)
-        .h(26.0)
-        .px(10.0)
-        .gap(6.0)
-        .center_y()
-        .radius(7.0)
-        .child(
-            text(label)
-                .font(k.ty.ui)
-                .color(if on { k.c.text_base } else { k.c.text_muted })
-                .group_color(k.c.text_base),
-        )
-        .children(count.map(|n| {
-            text(n.to_string())
-                .key(format!("extensions-count-{name}"))
-                .font(k.ty.small)
-                .color(if on { k.c.text_muted } else { k.c.text_faint })
-        }));
-    if on {
-        segment.fill(p.panel_raised)
-    } else {
-        k.interactive(segment.hover_group())
-            .on_press(move |s: &mut App| s.show(showing))
-    }
 }
 
 pub fn view(s: &App) -> El {
@@ -311,6 +269,23 @@ pub fn view(s: &App) -> El {
                     "Open Logger".into(),
                     "ext-logger-open".into(),
                     App::open_logger,
+                ),
+                slot(),
+            ],
+        ),
+        item(
+            p,
+            "ext-store".into(),
+            "Store".into(),
+            "Ready-made extensions from the G-ExtensionStore".into(),
+            badge("built-in", BadgeVariant::Subtle),
+            false,
+            vec![
+                icon_button(
+                    &PLAY,
+                    "Open Store".into(),
+                    "ext-store-open".into(),
+                    App::open_store,
                 ),
                 slot(),
             ],
@@ -414,7 +389,7 @@ pub fn view(s: &App) -> El {
                     .key("extensions-empty-gearth"),
                 Button::new("Browse store")
                     .variant(ButtonVariant::Contrast)
-                    .on_press(|s: &mut App| s.show(Showing::Store))
+                    .on_press(App::open_store)
                     .build(k)
                     .key("extensions-empty-browse"),
             ],
@@ -462,66 +437,13 @@ pub fn view(s: &App) -> El {
             list.child(item)
         },
     );
-    let showing = s.store.showing;
-    let manual = s
-        .extensions
-        .iter()
-        .filter(|(_, info)| info.file.is_none())
-        .count();
-    let switch = row()
-        .key("extensions-showing")
-        .role("tablist")
-        .label("Show")
-        .gap(2.0)
-        .child(showing_segment(
-            s,
-            Showing::Installed,
-            Some(s.installed.len() + manual),
-        ))
-        .child(showing_segment(
-            s,
-            Showing::Store,
-            s.store.catalog().map(|catalog| catalog.listings.len()),
-        ));
-    let install_from_file = (showing == Showing::Installed).then(|| {
-        Button::new("Install from file")
-            .variant(ButtonVariant::Outline)
-            .on_press_tx(install)
-            .build(k)
-            .key("install-from-file")
-    });
+    let install_from_file = Button::new("Install from file")
+        .variant(ButtonVariant::Outline)
+        .on_press_tx(install)
+        .build(k)
+        .key("install-from-file");
     let banner = gearth_banner(s);
     let import_offered = empty || banner.is_some();
-    let body = match showing {
-        Showing::Installed => col()
-            .key("installed")
-            .w_full()
-            .grow(1.0)
-            .min_h(0.0)
-            .gap(12.0)
-            .children(banner)
-            .child(
-                col()
-                    .w_full()
-                    .grow(1.0)
-                    .min_h(0.0)
-                    .scroll(ScrollSpec {
-                        stick_bottom: false,
-                    })
-                    .scroll_edge_fade(24.0)
-                    .child(list)
-                    .children((!import_offered).then(|| {
-                        row().w_full().pt(8.0).justify_end().child(
-                            Button::new("Import from G-Earth…")
-                                .variant(ButtonVariant::GhostMuted)
-                                .on_press_tx(choose_gearth)
-                                .build(k)
-                                .key("gearth-import-choose"),
-                        )
-                    })),
-            ),
-        Showing::Store => store::view(s),
-    };
     col()
         .key("extensions")
         .w_full()
@@ -541,10 +463,37 @@ pub fn view(s: &App) -> El {
                         .shrink()
                         .truncate(),
                 )
-                .children(install_from_file)
-                .child(switch),
+                .child(install_from_file),
         )
-        .child(body)
+        .child(
+            col()
+                .key("installed")
+                .w_full()
+                .grow(1.0)
+                .min_h(0.0)
+                .gap(12.0)
+                .children(banner)
+                .child(
+                    col()
+                        .w_full()
+                        .grow(1.0)
+                        .min_h(0.0)
+                        .scroll(ScrollSpec {
+                            stick_bottom: false,
+                        })
+                        .scroll_edge_fade(24.0)
+                        .child(list)
+                        .children((!import_offered).then(|| {
+                            row().w_full().pt(8.0).justify_end().child(
+                                Button::new("Import from G-Earth…")
+                                    .variant(ButtonVariant::GhostMuted)
+                                    .on_press_tx(choose_gearth)
+                                    .build(k)
+                                    .key("gearth-import-choose"),
+                            )
+                        })),
+                ),
+        )
 }
 
 pub fn cancel_uninstall(s: &mut App, e: &KeyEvent, tx: &mut Tx) -> bool {
@@ -552,15 +501,6 @@ pub fn cancel_uninstall(s: &mut App, e: &KeyEvent, tx: &mut Tx) -> bool {
         return false;
     }
     s.confirm_uninstall = None;
-    tx.instant();
-    true
-}
-
-pub fn close_detail(s: &mut App, e: &KeyEvent, tx: &mut Tx) -> bool {
-    if e.key != Key::Escape || s.store.detail.is_none() {
-        return false;
-    }
-    s.store.detail = None;
     tx.instant();
     true
 }

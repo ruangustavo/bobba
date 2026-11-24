@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
-use bobba_store::{Catalog, Listing, Origin, Runtime, is_newer};
-use rune::TextEdit;
+use bobba_store::{Catalog, ICON_SIDE, Icon, Listing, Origin, Runtime, is_newer};
+use rune::Pixels;
 
 use crate::backend::{CatalogEvent, InstalledKind, InstalledState, StoreInstall};
 
@@ -11,12 +11,6 @@ pub enum CatalogState {
     Loading,
     Loaded { catalog: Catalog, origin: Origin },
     Unreachable(String),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Showing {
-    Installed,
-    Store,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,26 +23,21 @@ pub enum ListingStatus {
     Failed(String),
 }
 
+#[derive(Debug, Clone)]
 pub struct StoreState {
     pub catalog: CatalogState,
-    pub showing: Showing,
-    pub detail: Option<String>,
-    pub category: Option<String>,
-    pub query: TextEdit,
     installs: HashMap<String, StoreInstall>,
     missing_runtimes: HashSet<Runtime>,
+    icons: HashMap<String, Pixels>,
 }
 
 impl Default for StoreState {
     fn default() -> Self {
         Self {
             catalog: CatalogState::NotLoaded,
-            showing: Showing::Installed,
-            detail: None,
-            category: None,
-            query: TextEdit::new(""),
             installs: HashMap::new(),
             missing_runtimes: HashSet::new(),
+            icons: HashMap::new(),
         }
     }
 }
@@ -70,6 +59,21 @@ impl StoreState {
                 self.installs.insert(title, progress);
             }
         }
+    }
+
+    pub fn handle_icon(&mut self, title: String, icon: Icon) -> Pixels {
+        let pixels = Pixels::new();
+        pixels.set(ICON_SIDE, ICON_SIDE, icon.rgba);
+        self.icons.insert(title, pixels.clone());
+        pixels
+    }
+
+    pub fn show_icon(&mut self, title: String, pixels: Pixels) {
+        self.icons.insert(title, pixels);
+    }
+
+    pub fn icon(&self, title: &str) -> Option<&Pixels> {
+        self.icons.get(title)
     }
 
     pub fn handle_missing(&mut self, missing: HashSet<Runtime>) {
@@ -94,31 +98,21 @@ impl StoreState {
         }
     }
 
-    pub fn visible(&self) -> Vec<&Listing> {
+    pub fn visible(&self, category: Option<&str>, query: &str) -> Vec<&Listing> {
         let Some(catalog) = self.catalog() else {
             return Vec::new();
         };
-        let query = self.query.text.trim().to_lowercase();
+        let query = query.trim().to_lowercase();
         catalog
             .listings
             .iter()
-            .filter(|l| {
-                self.category
-                    .as_ref()
-                    .is_none_or(|c| l.categories.contains(c))
-            })
+            .filter(|l| category.is_none_or(|c| l.categories.iter().any(|lc| lc == c)))
             .filter(|l| {
                 query.is_empty()
                     || l.title.to_lowercase().contains(&query)
                     || l.description.to_lowercase().contains(&query)
             })
             .collect()
-    }
-
-    pub fn open_detail(&self, visible: &[&Listing]) -> Option<String> {
-        self.detail
-            .clone()
-            .filter(|title| visible.iter().any(|l| &l.title == title))
     }
 
     pub fn status(&self, listing: &Listing, installed: &[InstalledState]) -> ListingStatus {
@@ -204,19 +198,20 @@ mod tests {
         }
     }
 
-    fn titles(store: &StoreState) -> Vec<&str> {
-        store.visible().iter().map(|l| l.title.as_str()).collect()
+    fn titles<'a>(store: &'a StoreState, category: Option<&str>, query: &str) -> Vec<&'a str> {
+        store
+            .visible(category, query)
+            .iter()
+            .map(|l| l.title.as_str())
+            .collect()
     }
 
     #[test]
     fn filters_by_category_and_search() {
-        let mut store = loaded();
-        assert_eq!(titles(&store), ["Room Mapper", "Trade Ledger"]);
-        store.category = Some("Trading".into());
-        assert_eq!(titles(&store), ["Trade Ledger"]);
-        store.category = None;
-        store.query = TextEdit::new("floor");
-        assert_eq!(titles(&store), ["Room Mapper"]);
+        let store = loaded();
+        assert_eq!(titles(&store, None, ""), ["Room Mapper", "Trade Ledger"]);
+        assert_eq!(titles(&store, Some("Trading"), ""), ["Trade Ledger"]);
+        assert_eq!(titles(&store, None, "floor"), ["Room Mapper"]);
     }
 
     #[test]
@@ -245,18 +240,6 @@ mod tests {
             store.status(&mapper, &[]),
             ListingStatus::Failed("404".into())
         );
-    }
-
-    #[test]
-    fn the_detail_closes_when_its_listing_is_filtered_out() {
-        let mut store = loaded();
-        store.detail = Some("Room Mapper".into());
-        assert_eq!(
-            store.open_detail(&store.visible()).as_deref(),
-            Some("Room Mapper")
-        );
-        store.category = Some("Trading".into());
-        assert_eq!(store.open_detail(&store.visible()), None);
     }
 
     #[test]

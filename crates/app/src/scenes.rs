@@ -11,7 +11,7 @@ use bobba_store::{Catalog, Origin, Os};
 
 use crate::backend::{CatalogEvent, InstalledKind, InstalledState};
 use crate::state::{App, GEarthOffer, KeyState, Mode, Phase, Tab, Traffic};
-use crate::store::Showing;
+use crate::store_window::StoreWindow;
 
 const RELEASE: &str = "MAC63-202611201617-213322612";
 const HEADLESS_FLAGS: [&str; 7] = [
@@ -347,7 +347,6 @@ fn store(s: &mut App) {
     s.store.handle_missing(std::collections::HashSet::from([
         bobba_store::Runtime::NodeJs,
     ]));
-    s.store.showing = Showing::Store;
 }
 
 fn permission(s: &mut App) {
@@ -360,22 +359,22 @@ fn permission(s: &mut App) {
         });
 }
 
-pub type Break = (&'static str, &'static str, fn(&mut App));
+pub type Break = (&'static str, &'static str, fn(&mut StoreWindow));
 
 pub const BREAKS: &[Break] = &[
     ("store", "Worst case", store_worst),
     ("store", "Worst details", store_worst_details),
     ("store", "Details: one long word", |s| {
         store_worst(s);
-        s.store.detail = Some("Benachrichtigungseinstellungen".into());
+        s.detail = Some("Benachrichtigungseinstellungen".into());
     }),
     ("store", "Details: long title failed", |s| {
         store_worst(s);
-        s.store.detail = Some("Copiador de Roupas Automático para Quartos Lotados".into());
+        s.detail = Some("Copiador de Roupas Automático para Quartos Lotados".into());
     }),
     ("store", "Details: no authors", |s| {
         store_worst(s);
-        s.store.detail = Some("🦊 Fox Follower".into());
+        s.detail = Some("🦊 Fox Follower".into());
     }),
     ("store", "Empty", store_empty),
     ("store", "One", store_one),
@@ -426,14 +425,14 @@ const WORST_EXTENSIONS: &str = r#"[
      "compatibility": {"systems": ["Mac", "Windows"], "clients": ["Flash"]}}
 ]"#;
 
-fn load_catalog(s: &mut App, config: &str, extensions: &str, origin: Origin) {
+fn load_catalog(s: &mut StoreWindow, config: &str, extensions: &str, origin: Origin) {
     if let Ok(catalog) = Catalog::parse(config, extensions, Os::current()) {
         s.store
             .handle_catalog(CatalogEvent::Loaded { catalog, origin });
     }
 }
 
-fn store_worst(s: &mut App) {
+fn store_worst(s: &mut StoreWindow) {
     s.installed = vec![InstalledState {
         id: "autoclick_1.2.0".into(),
         kind: InstalledKind::Package {
@@ -459,16 +458,16 @@ fn store_worst(s: &mut App) {
     );
 }
 
-fn store_worst_details(s: &mut App) {
+fn store_worst_details(s: &mut StoreWindow) {
     store_worst(s);
-    s.store.detail = Some("G-Presets - Building & Wired Presets".into());
+    s.detail = Some("G-Presets - Building & Wired Presets".into());
 }
 
-fn store_empty(s: &mut App) {
+fn store_empty(s: &mut StoreWindow) {
     load_catalog(s, STORE_CONFIG, "[]", Origin::Fresh);
 }
 
-fn store_one(s: &mut App) {
+fn store_one(s: &mut StoreWindow) {
     let one = format!(
         "[{}]",
         store_listing(
@@ -483,7 +482,7 @@ fn store_one(s: &mut App) {
     load_catalog(s, STORE_CONFIG, &one, Origin::Fresh);
 }
 
-fn store_huge(s: &mut App) {
+fn store_huge(s: &mut StoreWindow) {
     let listings: Vec<String> = (0..1000u32)
         .map(|i| {
             store_listing(
