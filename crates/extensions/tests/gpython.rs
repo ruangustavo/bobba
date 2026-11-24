@@ -97,3 +97,57 @@ async fn installed_extension_connects_with_its_cookie_and_no_prompt() {
         "installed extensions are not prompted"
     );
 }
+
+#[tokio::test]
+#[ignore = "needs g-python importable by the python3 on PATH"]
+async fn store_package_connects_with_its_cookie_and_no_prompt() {
+    use std::io::Write;
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/antispam.py");
+    let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    writer
+        .start_file(
+            "antispam.py",
+            zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored),
+        )
+        .expect("starts entry");
+    writer
+        .write_all(&std::fs::read(&fixture).expect("reads fixture"))
+        .expect("writes entry");
+    let archive = writer.finish().expect("finishes").into_inner();
+    let command = [
+        "python",
+        "antispam.py",
+        "-c",
+        "{cookie}",
+        "-p",
+        "{port}",
+        "-f",
+        "{filename}",
+    ]
+    .map(String::from);
+    let dir = tempfile::tempdir().expect("temp dir");
+    let installer = bobba_extensions::Installer::new(dir.path());
+    let installed = installer
+        .install_package("AntiSpam", "1.0", &command, &archive)
+        .expect("installs");
+    let mut w = world(None).await;
+    let (output, _lines) = tokio::sync::mpsc::unbounded_channel();
+    let _child =
+        bobba_extensions::launch(&installed, w.extension_port, &w.host, output).expect("launches");
+
+    let connected = loop {
+        let event = tokio::time::timeout(TIMEOUT, w.events.recv())
+            .await
+            .expect("event")
+            .expect("open");
+        if let HostEvent::ExtensionConnected { info, .. } = event {
+            break info;
+        }
+    };
+    assert_eq!(connected.file.as_deref(), Some("AntiSpam_1.0"));
+    assert!(
+        w.permissions.try_recv().is_err(),
+        "store packages are not prompted"
+    );
+}

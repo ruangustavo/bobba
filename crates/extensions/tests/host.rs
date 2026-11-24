@@ -247,3 +247,42 @@ async fn installed_extension_with_its_cookie_skips_the_prompt() {
     assert_eq!(connected, "AntiSpam");
     assert!(w.permissions.try_recv().is_err());
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn store_package_runs_its_command_inside_its_folder_with_placeholders() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let installer = bobba_extensions::Installer::new(dir.path());
+    let command = [
+        "/bin/sh",
+        "-c",
+        "printf '%s %s %s' \"$1\" \"$2\" \"$3\" > args.txt",
+        "--",
+        "{cookie}",
+        "{port}",
+        "{filename}",
+    ]
+    .map(String::from);
+    let installed = installer
+        .install_package("Echo", "1.0", &command, &empty_archive())
+        .expect("installs");
+    let w = world(None).await;
+    let (output, _lines) = tokio::sync::mpsc::unbounded_channel();
+
+    let mut child =
+        bobba_extensions::launch(&installed, w.extension_port, &w.host, output).expect("launches");
+    child.wait().await.expect("exits");
+
+    let written = std::fs::read_to_string(dir.path().join("Echo_1.0/extension/args.txt"))
+        .expect("ran inside the extension folder");
+    let parts: Vec<&str> = written.split(' ').collect();
+    assert_eq!(parts.len(), 3, "{written}");
+    assert!(parts[0].len() == 40 && parts[0].bytes().all(|b| b.is_ascii_digit()));
+    assert_eq!(parts[1], w.extension_port.to_string());
+    assert_eq!(parts[2], "Echo_1.0");
+}
+
+fn empty_archive() -> Vec<u8> {
+    let writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    writer.finish().expect("finishes archive").into_inner()
+}

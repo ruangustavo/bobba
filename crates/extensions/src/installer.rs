@@ -189,6 +189,11 @@ impl Installer {
             return Err(InstallError::InvalidName(folder));
         }
         let dir = self.dir.join(&folder);
+        if command.is_empty() {
+            return Err(InstallError::InvalidArchive(
+                "the extension has no command".to_owned(),
+            ));
+        }
         if dir.exists() {
             return Err(InstallError::AlreadyInstalled(title.to_owned()));
         }
@@ -297,11 +302,26 @@ pub fn launch<L: PacketInfoLoader>(
             command.args(["-p", &port.to_string(), "-f", &id, "-c", &cookie]);
             command
         }
-        InstalledExtension::Package(_) => {
-            return Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "store packages cannot be launched yet",
-            ));
+        InstalledExtension::Package(package) => {
+            let port = port.to_string();
+            let args: Vec<String> = package
+                .command
+                .iter()
+                .map(|arg| {
+                    arg.replace("{port}", &port)
+                        .replace("{filename}", &id)
+                        .replace("{cookie}", &cookie)
+                })
+                .collect();
+            let Some((program, rest)) = args.split_first() else {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "the extension has no command",
+                ));
+            };
+            let mut command = Command::new(resolve_program(program, on_path));
+            command.args(rest).current_dir(package.files());
+            command
         }
     };
     let mut child = command
@@ -317,6 +337,25 @@ pub fn launch<L: PacketInfoLoader>(
         tokio::spawn(forward_lines(stderr, id, output));
     }
     Ok(child)
+}
+
+fn resolve_program(program: &str, available: impl Fn(&str) -> bool) -> &str {
+    if program == "python" && !available("python") && available("python3") {
+        return "python3";
+    }
+    program
+}
+
+fn on_path(program: &str) -> bool {
+    let Some(paths) = std::env::var_os("PATH") else {
+        return false;
+    };
+    let names: Vec<String> = if cfg!(windows) {
+        vec![program.to_owned(), format!("{program}.exe")]
+    } else {
+        vec![program.to_owned()]
+    };
+    std::env::split_paths(&paths).any(|dir| names.iter().any(|name| dir.join(name).is_file()))
 }
 
 async fn forward_lines(
@@ -484,6 +523,16 @@ mod tests {
                 Err(InstallError::InvalidName(_))
             ));
         }
+    }
+
+    #[test]
+    fn python_falls_back_to_python3_only_when_python_is_missing() {
+        let only_python3 = |name: &str| name == "python3";
+        let both = |name: &str| name == "python" || name == "python3";
+        assert_eq!(resolve_program("python", only_python3), "python3");
+        assert_eq!(resolve_program("python", both), "python");
+        assert_eq!(resolve_program("python", |_| false), "python");
+        assert_eq!(resolve_program("java", only_python3), "java");
     }
 
     #[test]
