@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/protocol", "crates/session", "crates/extensions"]
+members = ["crates/protocol", "crates/session", "crates/extensions", "crates/sulek"]
 
 [workspace.package]
 edition = "2024"
@@ -15,5 +15,9 @@ serde_json = "1"
 tokio = { version = "1", features = ["full"] }
 futures = "0.3"
 tokio-util = "0.7"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+dirs = "6"
+tempfile = "3"
+bobba-extensions = { path = "crates/extensions" }
 bobba-protocol = { path = "crates/protocol" }
 bobba-session = { path = "crates/session" }
