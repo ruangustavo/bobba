@@ -79,7 +79,7 @@ async fn world(intercept_timeout: Option<Duration>) -> World {
         });
     let (session_events, _) = mpsc::unbounded_channel();
     let (log_tx, log) = mpsc::channel(1024);
-    let (session, _) = session
+    let _ = session
         .expect("session")
         .start(host.clone(), session_events, log_tx);
     World {
