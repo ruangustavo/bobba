@@ -25,3 +25,13 @@ cargo test --quiet --workspace >/dev/null 2>&1 || {
   cargo test --quiet --workspace 2>&1 | grep -E 'panicked|FAILED|error' >&2
   exit 1
 }
+
+if [ "$(uname -s)" = "Darwin" ]; then
+  host="$(rustc -vV | sed -n 's/^host: //p')"
+  tools="$root/target/xwin-tools"
+  mkdir -p "$tools" && ln -sf "$(rustc --print sysroot)/lib/rustlib/$host/bin/llvm-ar" "$tools/llvm-lib"
+  PATH="$tools:$PATH" XWIN_ACCEPT_LICENSE=1 cargo xwin clippy --quiet --workspace --all-targets --target x86_64-pc-windows-msvc -- -D warnings || {
+    echo "pre-commit: clippy found Windows warnings; needs cargo-xwin, the x86_64-pc-windows-msvc target and the llvm-tools component" >&2
+    exit 1
+  }
+fi

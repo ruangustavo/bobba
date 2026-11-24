@@ -37,6 +37,7 @@ The pre-commit hook lives in `.githooks/`; enable it once per clone with `git co
 2. `cargo fmt --all -- --check`
 3. `cargo clippy --workspace --all-targets -- -D warnings`
 4. `cargo test --workspace`
+5. On macOS, `cargo xwin clippy --workspace --all-targets --target x86_64-pc-windows-msvc -- -D warnings`: the Windows code compiles. It needs `cargo install cargo-xwin`, `rustup target add x86_64-pc-windows-msvc` and `rustup component add llvm-tools`. It proves the code compiles for Windows, not that it works there.
 
 UI tests run headless against fake states in `crates/app/src/scenes.rs`.
 

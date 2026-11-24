@@ -282,6 +282,7 @@ async fn store_package_runs_its_command_inside_its_folder_with_placeholders() {
     assert_eq!(parts[2], "Echo_1.0");
 }
 
+#[cfg(unix)]
 fn empty_archive() -> Vec<u8> {
     let writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
     writer.finish().expect("finishes archive").into_inner()
