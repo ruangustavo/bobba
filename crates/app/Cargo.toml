@@ -1,0 +1,24 @@
+[package]
+name = "bobba"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+bobba-extensions.workspace = true
+bobba-protocol.workspace = true
+bobba-session.workspace = true
+bobba-sulek.workspace = true
+gpui-kit.workspace = true
+smol.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+gpui-kit = { workspace = true, features = ["test-support"] }
+tokio.workspace = true
+bobba-protocol.workspace = true
+bobba-session.workspace = true
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+gpui-pre-apple = "=0.3.14"

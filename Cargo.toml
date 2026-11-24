@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/protocol", "crates/session", "crates/extensions", "crates/sulek"]
+members = ["crates/protocol", "crates/session", "crates/extensions", "crates/sulek", "crates/app"]
 
 [workspace.package]
 edition = "2024"
@@ -19,5 +19,8 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 dirs = "6"
 tempfile = "3"
 bobba-extensions = { path = "crates/extensions" }
+bobba-sulek = { path = "crates/sulek" }
+gpui-kit = "0.11"
+smol = "2"
 bobba-protocol = { path = "crates/protocol" }
 bobba-session = { path = "crates/session" }
