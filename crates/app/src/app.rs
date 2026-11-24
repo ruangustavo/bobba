@@ -8,7 +8,7 @@ use bobba_protocol::{Direction, PacketInfo};
 use bobba_session::{ConnectionInfo, LogEntry, SessionEvent, Upstream};
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::Selectable as _;
-use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::button::{Button, ButtonGroup, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::{
@@ -22,6 +22,7 @@ use crate::injection::{INJECTION_NAME, InjectionPanel};
 use crate::logger::{LoggerEvent, LoggerPanel};
 
 const CONSOLE_LIMIT: usize = 500;
+const SKULL_PNG: &[u8] = include_bytes!("../assets/skull.png");
 const DEFAULT_HOTEL: &str = "game-br.habbo.com";
 const DEFAULT_GAME_PORT: &str = "30000";
 
@@ -358,19 +359,27 @@ impl BobbaApp {
             ConnectionStatus::Failed(_) => cx.theme().red,
             ConnectionStatus::Idle => cx.theme().muted_foreground,
         };
+        let skull = Arc::new(Image::from_bytes(ImageFormat::Png, SKULL_PNG.to_vec()));
         TitleBar::new()
             .child(
-                TabBar::new("tabs")
-                    .segmented()
-                    .px_0()
-                    .py(px(2.))
-                    .bg(cx.theme().title_bar)
-                    .selected_index(self.tab.index())
-                    .on_click(cx.listener(|this, ix: &usize, _, cx| {
-                        let tab = AppTab::ALL.get(*ix).copied().unwrap_or(AppTab::Connection);
-                        this.select_tab(tab, cx);
-                    }))
-                    .children(AppTab::ALL.map(|tab| Tab::new().label(tab.label()))),
+                h_flex()
+                    .gap_3()
+                    .items_center()
+                    .child(img(skull).size(px(18.)).flex_none())
+                    .child(
+                        TabBar::new("tabs")
+                            .segmented()
+                            .px_0()
+                            .py(px(2.))
+                            .bg(cx.theme().title_bar)
+                            .selected_index(self.tab.index())
+                            .on_click(cx.listener(|this, ix: &usize, _, cx| {
+                                let tab =
+                                    AppTab::ALL.get(*ix).copied().unwrap_or(AppTab::Connection);
+                                this.select_tab(tab, cx);
+                            }))
+                            .children(AppTab::ALL.map(|tab| Tab::new().label(tab.label()))),
+                    ),
             )
             .child(
                 h_flex()
@@ -438,33 +447,28 @@ impl BobbaApp {
     }
 
     fn render_connection(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let mode_button = |mode: ConnectionMode, id: &'static str, label: &'static str| {
-            Button::new(id)
-                .label(label)
-                .small()
-                .selected(self.mode == mode)
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.mode = mode;
-                    cx.notify();
-                }))
-        };
-        v_flex()
+        let modes = ButtonGroup::new("connection-mode")
+            .outline()
+            .small()
             .child(
-                h_flex()
-                    .px_4()
-                    .pt_4()
-                    .gap_2()
-                    .child(mode_button(
-                        ConnectionMode::Automatic,
-                        "mode-automatic",
-                        "Habbo AIR client",
-                    ))
-                    .child(mode_button(
-                        ConnectionMode::Manual,
-                        "mode-manual",
-                        "Manual host and port",
-                    )),
+                Button::new("mode-automatic")
+                    .label("Habbo AIR client")
+                    .selected(self.mode == ConnectionMode::Automatic),
             )
+            .child(
+                Button::new("mode-manual")
+                    .label("Manual host and port")
+                    .selected(self.mode == ConnectionMode::Manual),
+            )
+            .on_click(cx.listener(|this, selected: &Vec<usize>, _, cx| {
+                this.mode = match selected.first() {
+                    Some(1) => ConnectionMode::Manual,
+                    _ => ConnectionMode::Automatic,
+                };
+                cx.notify();
+            }));
+        v_flex()
+            .child(h_flex().px_4().pt_4().child(modes))
             .child(match self.mode {
                 ConnectionMode::Automatic => self.render_automatic(cx).into_any_element(),
                 ConnectionMode::Manual => self.render_manual(cx).into_any_element(),
