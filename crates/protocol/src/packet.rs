@@ -70,7 +70,12 @@ impl Packet {
 
 impl std::fmt::Debug for Packet {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Packet({}: {:?})", self.header_id(), self.body())
+        write!(
+            f,
+            "Packet({}: {})",
+            self.header_id(),
+            crate::expression::display_bytes(self.body())
+        )
     }
 }
 
