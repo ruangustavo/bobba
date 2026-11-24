@@ -10,6 +10,7 @@ use bobba::setup::Step;
 use bobba::state::{App, Phase, SendResult, Tab};
 use bobba::store::CatalogState;
 use bobba::store_feed::StoreRequest;
+use bobba::store_hint::StoreHint;
 use bobba::store_window::StoreWindow;
 use bobba::view::root;
 use bobba_extensions::{ExtensionOutput, HostEvent, Permission, PermissionRequest, ProcessStatus};
@@ -688,20 +689,34 @@ fn an_outdated_store_extension_offers_its_update_in_the_installed_list() {
 }
 
 #[test]
-fn with_no_extensions_yet_the_list_points_to_the_store() {
-    let mut rt = runtime("extensions");
-    rt.update(|s, _| {
-        s.installed.clear();
-        s.extensions.clear();
-    });
-    settle(&mut rt);
-    assert!(shown(&rt, "extensions-empty-gearth"));
-    assert!(
-        !shown(&rt, "gearth-import-choose"),
-        "the empty list offers the G-Earth import once"
-    );
-    press(&mut rt, "extensions-empty-browse");
+fn with_no_extensions_yet_a_hint_points_to_the_store_and_to_g_earth() {
+    let mut rt = runtime("extensions-empty");
+    assert!(shown(&rt, "store-hint-gearth"));
+    press(&mut rt, "store-hint-browse");
     assert_eq!(rt.state.store.catalog, CatalogState::Loading);
+}
+
+#[test]
+fn the_store_hint_stays_closed_once_dismissed() {
+    let mut rt = runtime("extensions-empty");
+    press(&mut rt, "store-hint-dismiss");
+    assert!(!shown(&rt, "store-hint"));
+}
+
+#[test]
+fn a_store_hint_dismissed_in_an_earlier_run_never_shows() {
+    let mut rt = runtime("extensions-empty");
+    rt.update(|s, _| s.handle(UiEvent::StoreHint(StoreHint::Dismissed)));
+    settle(&mut rt);
+    assert!(!shown(&rt, "store-hint"));
+}
+
+#[test]
+fn the_store_hint_waits_while_g_earth_extensions_are_offered() {
+    let mut rt = runtime("extensions-empty");
+    gearth_found(&mut rt);
+    assert!(shown(&rt, "gearth-import"));
+    assert!(!shown(&rt, "store-hint"));
 }
 
 fn gearth_found(rt: &mut Runtime<App>) {
@@ -718,17 +733,11 @@ fn gearth_found(rt: &mut Runtime<App>) {
 fn extensions_found_in_gearth_are_offered_until_dismissed() {
     let mut rt = runtime("extensions");
     assert!(!shown(&rt, "gearth-import"));
-    assert!(shown(&rt, "gearth-import-choose"));
     gearth_found(&mut rt);
     assert!(shows_text(&rt, "Found 4 extensions in G-Earth"));
-    assert!(
-        !shown(&rt, "gearth-import-choose"),
-        "the banner is the only G-Earth import while it is open"
-    );
 
     press(&mut rt, "gearth-import-dismiss");
     assert!(!shown(&rt, "gearth-import"));
-    assert!(shown(&rt, "gearth-import-choose"));
 }
 
 #[test]

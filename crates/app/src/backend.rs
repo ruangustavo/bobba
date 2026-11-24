@@ -21,6 +21,7 @@ use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 
 use crate::setup::Step;
+use crate::store_hint::StoreHint;
 
 pub type Host = ExtensionHost<Sulek>;
 
@@ -76,6 +77,7 @@ pub enum Command {
     CheckRuntimes,
     StopExtension(String),
     UninstallExtension(String),
+    DismissStoreHint,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -133,6 +135,7 @@ pub enum UiEvent {
         count: usize,
     },
     GEarthImported(Result<usize, String>),
+    StoreHint(StoreHint),
     StoreInstall {
         title: String,
         progress: StoreInstall,
@@ -310,6 +313,9 @@ async fn run(
     for installed in runner.installer.installed() {
         runner.start(installed.id(), &ui).await;
     }
+    ui.emit(UiEvent::StoreHint(StoreHint::load(
+        &StoreHint::default_dir(),
+    )));
     runner.check_runtimes(&ui).await;
     runner.publish(&ui).await;
     runner.browse();
@@ -396,6 +402,13 @@ async fn run(
                 runner.stop(&file_name).await;
                 if let Err(error) = runner.installer.uninstall(&file_name) {
                     ui.emit(UiEvent::Notice(format!("could not uninstall: {error}")));
+                }
+            }
+            Command::DismissStoreHint => {
+                if let Err(error) = StoreHint::remember_dismissed(&StoreHint::default_dir()) {
+                    ui.emit(UiEvent::Notice(format!(
+                        "could not save the dismissed hint: {error}"
+                    )));
                 }
             }
             Command::Abort => {

@@ -19,6 +19,7 @@ use crate::setup::{Progress, Step};
 
 use crate::store::{CatalogState, StoreState};
 use crate::store_feed::{StoreEvent, StoreFeed, StoreRequest};
+use crate::store_hint::StoreHint;
 use crate::store_window::StoreWindow;
 
 const CONSOLE_LIMIT: usize = 500;
@@ -180,6 +181,7 @@ pub struct App {
     pub store_feed: StoreFeed,
     store_window: Option<WindowHandle>,
     pub gearth: GEarthOffer,
+    pub store_hint: StoreHint,
 }
 
 impl App {
@@ -218,6 +220,7 @@ impl App {
             store_feed: StoreFeed::new(),
             store_window: None,
             gearth: GEarthOffer::None,
+            store_hint: StoreHint::Loading,
         }
     }
 
@@ -305,6 +308,7 @@ impl App {
                     self.gearth = GEarthOffer::Found { folder, count };
                 }
             }
+            UiEvent::StoreHint(hint) => self.store_hint = hint,
             UiEvent::GEarthImported(result) => {
                 self.gearth = GEarthOffer::Dismissed;
                 self.log_console(match result {
@@ -466,6 +470,11 @@ impl App {
         if let Some(request) = self.permission_requests.pop_front() {
             let _ = request.respond.send(permission);
         }
+    }
+
+    pub fn dismiss_store_hint(&mut self) {
+        self.store_hint = StoreHint::Dismissed;
+        self.send(Command::DismissStoreHint);
     }
 
     pub fn open_store(&mut self) {

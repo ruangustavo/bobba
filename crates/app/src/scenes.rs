@@ -12,6 +12,7 @@ use bobba_store::{Catalog, Origin, Os};
 use crate::backend::{CatalogEvent, InstalledKind, InstalledState};
 use crate::logger::Logger;
 use crate::state::{App, GEarthOffer, KeyState, Mode, Phase, Tab, Traffic};
+use crate::store_hint::StoreHint;
 use crate::store_window::StoreWindow;
 
 const RELEASE: &str = "MAC63-202611201617-213322612";
@@ -45,6 +46,7 @@ pub const SCENES: &[Scene] = &[
     ("manual", |s| s.mode = Mode::Manual),
     ("injection", injection),
     ("extensions", extensions),
+    ("extensions-empty", extensions_empty),
     ("store", store),
     ("gearth", |s| {
         extensions(s);
@@ -249,6 +251,13 @@ fn extensions(s: &mut App) {
     ] {
         s.log_console(line.into());
     }
+}
+
+fn extensions_empty(s: &mut App) {
+    extensions(s);
+    s.installed.clear();
+    s.extensions.clear();
+    s.store_hint = StoreHint::Open;
 }
 
 const STORE_CONFIG: &str = r#"{"categories": [{"name": "Building"}, {"name": "Trading"},

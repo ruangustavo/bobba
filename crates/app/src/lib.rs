@@ -9,6 +9,7 @@ pub mod setup;
 pub mod state;
 pub mod store;
 pub mod store_feed;
+pub mod store_hint;
 pub mod store_window;
 pub mod view;
 

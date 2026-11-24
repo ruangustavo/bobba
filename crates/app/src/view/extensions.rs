@@ -10,6 +10,7 @@ use bobba_extensions::{ExtensionId, ProcessStatus};
 
 use crate::backend::{Command, InstalledKind};
 use crate::state::{App, GEarthOffer};
+use crate::store_hint::StoreHint;
 use crate::view::theme::{Paint, paint};
 
 static PLAY: rune::Icon = rune::Icon {
@@ -125,6 +126,56 @@ fn gearth_banner(s: &App) -> Option<El> {
             )
             .children(actions),
     )
+}
+
+fn hint_link(key: &str, label: &'static str) -> El {
+    let p = paint();
+    row()
+        .key(key.to_owned())
+        .role("button")
+        .label(label)
+        .px(6.0)
+        .h(24.0)
+        .center_y()
+        .radius(6.0)
+        .child(text(label).font(p.kit.ty.small_medium).color(p.blue))
+}
+
+fn store_hint() -> El {
+    let p = paint();
+    let k = &p.kit;
+    row()
+        .key("store-hint")
+        .w_full()
+        .pl(12.0)
+        .pr(6.0)
+        .py(6.0)
+        .gap(10.0)
+        .center_y()
+        .radius(10.0)
+        .fill(p.blue.alpha(0.10))
+        .border(1.0, p.blue.alpha(0.28))
+        .child(icon(&INFO, 16.0).color(p.blue))
+        .child(
+            text("New here? The store has ready-made extensions for Flash")
+                .font(k.ty.small)
+                .color(k.c.text_base)
+                .grow(1.0)
+                .shrink()
+                .truncate(),
+        )
+        .child(hint_link("store-hint-gearth", "Import from G-Earth").on_press_tx(choose_gearth))
+        .child(hint_link("store-hint-browse", "Browse store").on_press(App::open_store))
+        .child(
+            IconButton::new(&CLOSE)
+                .variant(IconButtonVariant::Ghost)
+                .control_size(ControlSize::Small)
+                .label("Dismiss")
+                .help("Dismiss")
+                .on_press(App::dismiss_store_hint)
+                .build(k)
+                .key("store-hint-dismiss"),
+        )
 }
 
 fn install(_: &mut App, tx: &mut Tx) {
@@ -263,15 +314,12 @@ pub fn view(s: &App) -> El {
             "Shows every packet after extensions decide, never slows traffic".into(),
             badge("built-in", BadgeVariant::Subtle),
             false,
-            vec![
-                icon_button(
-                    &PLAY,
-                    "Open Logger".into(),
-                    "ext-logger-open".into(),
-                    App::open_logger,
-                ),
-                slot(),
-            ],
+            vec![icon_button(
+                &PLAY,
+                "Open Logger".into(),
+                "ext-logger-open".into(),
+                App::open_logger,
+            )],
         ),
         item(
             p,
@@ -280,24 +328,12 @@ pub fn view(s: &App) -> El {
             "Ready-made extensions from the G-ExtensionStore".into(),
             badge("built-in", BadgeVariant::Subtle),
             false,
-            vec![
-                icon_button(
-                    &PLAY,
-                    "Open Store".into(),
-                    "ext-store-open".into(),
-                    App::open_store,
-                ),
-                slot(),
-            ],
-        ),
-        item(
-            p,
-            "ext-injection".into(),
-            "Injection".into(),
-            "Sends packet expressions to the client or the server".into(),
-            badge("built-in", BadgeVariant::Subtle),
-            false,
-            vec![],
+            vec![icon_button(
+                &PLAY,
+                "Open Store".into(),
+                "ext-store-open".into(),
+                App::open_store,
+            )],
         ),
     ];
     for state in &s.installed {
@@ -372,29 +408,6 @@ pub fn view(s: &App) -> El {
             update.into_iter().chain([first, second]).collect(),
         ));
     }
-    let empty = s.installed.is_empty() && !s.extensions.iter().any(|(_, info)| info.file.is_none());
-    if empty {
-        items.push(item(
-            p,
-            "extensions-empty".into(),
-            "No extensions yet".into(),
-            "The G-ExtensionStore has ready-made extensions for Flash".into(),
-            el(),
-            false,
-            vec![
-                Button::new("Import from G-Earth")
-                    .variant(ButtonVariant::Outline)
-                    .on_press_tx(choose_gearth)
-                    .build(k)
-                    .key("extensions-empty-gearth"),
-                Button::new("Browse store")
-                    .variant(ButtonVariant::Contrast)
-                    .on_press(App::open_store)
-                    .build(k)
-                    .key("extensions-empty-browse"),
-            ],
-        ));
-    }
     for (id, info) in s.extensions.iter().filter(|(_, info)| info.file.is_none()) {
         items.push(item(
             p,
@@ -443,7 +456,8 @@ pub fn view(s: &App) -> El {
         .build(k)
         .key("install-from-file");
     let banner = gearth_banner(s);
-    let import_offered = empty || banner.is_some();
+    let empty = s.installed.is_empty() && !s.extensions.iter().any(|(_, info)| info.file.is_none());
+    let hint = (empty && banner.is_none() && s.store_hint == StoreHint::Open).then(store_hint);
     col()
         .key("extensions")
         .w_full()
@@ -473,6 +487,7 @@ pub fn view(s: &App) -> El {
                 .min_h(0.0)
                 .gap(12.0)
                 .children(banner)
+                .children(hint)
                 .child(
                     col()
                         .w_full()
@@ -482,16 +497,7 @@ pub fn view(s: &App) -> El {
                             stick_bottom: false,
                         })
                         .scroll_edge_fade(24.0)
-                        .child(list)
-                        .children((!import_offered).then(|| {
-                            row().w_full().pt(8.0).justify_end().child(
-                                Button::new("Import from G-Earth…")
-                                    .variant(ButtonVariant::GhostMuted)
-                                    .on_press_tx(choose_gearth)
-                                    .build(k)
-                                    .key("gearth-import-choose"),
-                            )
-                        })),
+                        .child(list),
                 ),
         )
 }
