@@ -1,5 +1,6 @@
 pub mod direction;
 pub mod expression;
+pub mod extension_message;
 pub mod framer;
 pub mod latin1;
 pub mod message;
