@@ -522,6 +522,7 @@ fn listings(s: &App) -> El {
                     .scroll(ScrollSpec {
                         stick_bottom: false,
                     })
+                    .scroll_edge_fade(24.0)
                     .child(rows),
             )
             .children(detail),

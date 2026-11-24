@@ -4,7 +4,6 @@ use std::path::Path;
 use rune::{Color, El, FileDialogOptions, Key, KeyEvent, ScrollSpec, Tx, col, el, icon, row, text};
 use rune_kit::{
     Badge, BadgeVariant, Button, ButtonVariant, ControlSize, IconButton, IconButtonVariant, Loader,
-    SegmentedControl,
 };
 
 use crate::backend::{Command, InstalledKind};
@@ -159,13 +158,46 @@ fn dot(color: Color) -> El {
     el().size(7.0, 7.0).radius(3.5).fill(color)
 }
 
+fn showing_segment(s: &App, showing: Showing, count: Option<usize>) -> El {
+    let p = paint();
+    let k = &p.kit;
+    let on = s.store.showing == showing;
+    let (label, index, name) = match showing {
+        Showing::Installed => ("Installed", 0, "installed"),
+        Showing::Store => ("Store", 1, "store"),
+    };
+    let segment = row()
+        .key(format!("segment{index}"))
+        .role("tab")
+        .label(label)
+        .h(26.0)
+        .px(10.0)
+        .gap(6.0)
+        .center_y()
+        .radius(7.0)
+        .child(
+            text(label)
+                .font(k.ty.ui)
+                .color(if on { k.c.text_base } else { k.c.text_muted })
+                .group_color(k.c.text_base),
+        )
+        .children(count.map(|n| {
+            text(n.to_string())
+                .key(format!("extensions-count-{name}"))
+                .font(k.ty.small)
+                .color(if on { k.c.text_muted } else { k.c.text_faint })
+        }));
+    if on {
+        segment.fill(p.panel_raised)
+    } else {
+        k.interactive(segment.hover_group())
+            .on_press(move |s: &mut App| s.show(showing))
+    }
+}
+
 pub fn view(s: &App) -> El {
     let p = paint();
     let k = &p.kit;
-    let port = s.extension_port.map_or_else(
-        || "The extension port is not open yet.".to_owned(),
-        |port| format!("Extensions in any language connect on port {port}."),
-    );
     let mut items = vec![
         item(
             p,
@@ -308,21 +340,26 @@ pub fn view(s: &App) -> El {
         },
     );
     let showing = s.store.showing;
-    let switch = SegmentedControl::new(
-        &["Installed", "Store"],
-        Some(usize::from(showing == Showing::Store)),
-    )
-    .label("Show")
-    .fit()
-    .on_pick(|s: &mut App, i, _| {
-        s.show(if i == 1 {
-            Showing::Store
-        } else {
-            Showing::Installed
-        })
-    })
-    .build(k)
-    .key("extensions-showing");
+    let manual = s
+        .extensions
+        .iter()
+        .filter(|(_, info)| info.file.is_none())
+        .count();
+    let switch = row()
+        .key("extensions-showing")
+        .role("tablist")
+        .label("Show")
+        .gap(2.0)
+        .child(showing_segment(
+            s,
+            Showing::Installed,
+            Some(s.installed.len() + manual),
+        ))
+        .child(showing_segment(
+            s,
+            Showing::Store,
+            s.store.catalog().map(|catalog| catalog.listings.len()),
+        ));
     let install_from_file = (showing == Showing::Installed).then(|| {
         Button::new("Install from file")
             .variant(ButtonVariant::Outline)
@@ -346,6 +383,7 @@ pub fn view(s: &App) -> El {
                     .scroll(ScrollSpec {
                         stick_bottom: false,
                     })
+                    .scroll_edge_fade(24.0)
                     .child(list)
                     .child(
                         row().w_full().pt(8.0).justify_end().child(
@@ -371,16 +409,12 @@ pub fn view(s: &App) -> El {
                 .center_y()
                 .gap(12.0)
                 .child(
-                    col()
-                        .gap(3.0)
+                    text("Extensions")
+                        .font(TextStyle::new(20.0, 650.0))
+                        .color(k.c.text_base)
                         .grow(1.0)
                         .shrink()
-                        .child(
-                            text("Extensions")
-                                .font(TextStyle::new(20.0, 650.0))
-                                .color(k.c.text_base),
-                        )
-                        .child(text(port).font(k.ty.body).color(k.c.text_muted).truncate()),
+                        .truncate(),
                 )
                 .children(install_from_file)
                 .child(switch),

@@ -463,6 +463,14 @@ fn the_store_opens_on_the_extensions_tab_and_asks_for_the_catalog() {
 }
 
 #[test]
+fn the_installed_and_store_switch_counts_each_side() {
+    let rt = runtime("store");
+    assert_eq!(text_of(&rt, "extensions-count-installed"), "4");
+    assert_eq!(text_of(&rt, "extensions-count-store"), "6");
+    assert!(!shows_text(&rt, "connect on port"));
+}
+
+#[test]
 fn a_store_listing_opens_its_details_beside_the_list_and_escape_closes_them() {
     let mut rt = runtime("store");
     assert!(shown(&rt, "store-row-Trade Ledger"));
