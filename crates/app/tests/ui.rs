@@ -485,6 +485,28 @@ fn a_store_listing_opens_its_details_beside_the_list_and_escape_closes_them() {
 }
 
 #[test]
+fn a_store_listing_shows_install_only_while_its_row_is_hovered() {
+    let mut rt = runtime("store");
+    let opacity = |rt: &Runtime<App>| {
+        rt.elements()
+            .into_iter()
+            .find(|e| e.key.as_deref() == Some("store-action-Trade Ledger") && !e.exiting)
+            .map(|e| e.opacity)
+            .unwrap_or_else(|| panic!("store-action-Trade Ledger is on screen"))
+    };
+    assert_eq!(opacity(&rt), 0.0);
+
+    let (x, y) = rt.find("store-row-Trade Ledger").expect("row is on screen");
+    rt.pointer_move(x, y);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(opacity(&rt), 1.0);
+
+    rt.pointer_move(0.0, 0.0);
+    rt.frame(1.0 / 60.0);
+    assert_eq!(opacity(&rt), 0.0);
+}
+
+#[test]
 fn a_store_listing_shows_its_download_and_its_failure() {
     let mut rt = runtime("store");
     rt.update(|s, _| {

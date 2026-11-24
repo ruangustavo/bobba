@@ -1,7 +1,7 @@
 use bobba_store::{Listing, Origin};
 use rune::tok::TextStyle;
 use rune::{
-    El, Icon, ScrollSpec, Spring, SpringPair, Transition, Tx, col, el, icon, oklch, row, text,
+    Anim, El, Icon, ScrollSpec, Spring, SpringPair, Transition, Tx, col, el, icon, oklch, row, text,
 };
 use rune_kit::{Button, ButtonVariant, IconButton, IconButtonVariant, Loader, TextInput};
 
@@ -188,6 +188,10 @@ fn listing_row(s: &App, listing: &Listing, selected: bool) -> El {
         _ => text(listing.description.clone()).color(k.c.text_muted),
     };
     let title = listing.title.clone();
+    let action = match status {
+        ListingStatus::Available => action(listing, &status).group_opacity(0.0, 1.0),
+        _ => action(listing, &status),
+    };
     row()
         .key(format!("store-row-{}", listing.title))
         .role("button")
@@ -202,6 +206,8 @@ fn listing_row(s: &App, listing: &Listing, selected: bool) -> El {
             p.panel.alpha(0.0)
         })
         .hover(p.panel_raised)
+        .hover_group()
+        .hover_motion(Anim::INSTANT, Anim::INSTANT)
         .child(tile(&listing.title, 36.0))
         .child(
             col()
@@ -222,7 +228,7 @@ fn listing_row(s: &App, listing: &Listing, selected: bool) -> El {
                 )
                 .child(subtitle.font(k.ty.small).truncate()),
         )
-        .child(action(listing, &status))
+        .child(action)
         .on_press(move |s: &mut App| s.toggle_store_detail(&title))
 }
 
