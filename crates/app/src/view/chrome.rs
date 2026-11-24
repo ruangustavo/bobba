@@ -76,7 +76,8 @@ pub fn titlebar(s: &App, cx: &mut Cx<App>) -> El {
                 .key("status-slot")
                 .grow(1.0)
                 .justify_end()
-                .child(status),
+                .child(status)
+                .child(el().w(cx.chrome_insets().trailing)),
         )
 }
 

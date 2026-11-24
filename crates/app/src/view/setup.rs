@@ -12,6 +12,35 @@ const MARKER: f32 = 22.0;
 const FADE: Spring = Spring::new(0.18, 0.0);
 const ENTER: SpringPair = SpringPair::new(Spring::new(0.25, 0.0), Spring::new(0.2, 0.0));
 
+struct Wording {
+    allow: &'static str,
+    open: &'static str,
+    not_started: &'static str,
+    under_way: &'static str,
+    allow_failed: &'static str,
+    asking: &'static str,
+}
+
+#[cfg(target_os = "macos")]
+const WORDING: Wording = Wording {
+    allow: "Your Mac password, to edit /etc/hosts",
+    open: "Bobba waits for Habbo, then undoes /etc/hosts",
+    not_started: "Bobba re-signs Habbo.app once, and redirects Habbo through /etc/hosts.",
+    under_way: "Re-signing happens once. The /etc/hosts redirect asks for your password every time.",
+    allow_failed: "Couldn't edit /etc/hosts",
+    asking: "macOS is asking for your password so Bobba can point Habbo's game servers at itself in /etc/hosts. The entries go away when Habbo connects.",
+};
+
+#[cfg(not(target_os = "macos"))]
+const WORDING: Wording = Wording {
+    allow: "Administrator permission, to edit the hosts file",
+    open: "Bobba waits for Habbo, then undoes the hosts file",
+    not_started: "Bobba redirects Habbo through the hosts file while it connects.",
+    under_way: "The hosts file redirect asks for administrator permission every time.",
+    allow_failed: "Couldn't edit the hosts file",
+    asking: "Windows is asking for administrator permission so Bobba can point Habbo's game servers at itself in the hosts file. The entries go away when Habbo connects.",
+};
+
 fn title(step: Step) -> &'static str {
     match step {
         Step::Prepare => "Prepare Habbo",
@@ -23,17 +52,14 @@ fn title(step: Step) -> &'static str {
 fn detail(step: Step) -> &'static str {
     match step {
         Step::Prepare => "Re-signs Habbo.app so Bobba can read its memory",
-        Step::Allow => "Your Mac password, to edit /etc/hosts",
-        Step::Open => "Bobba waits for Habbo, then undoes /etc/hosts",
+        Step::Allow => WORDING.allow,
+        Step::Open => WORDING.open,
     }
 }
 
 fn header(progress: &Progress) -> (&'static str, &'static str) {
     match progress {
-        Progress::NotStarted => (
-            "Connect to Habbo",
-            "Bobba re-signs Habbo.app once, and redirects Habbo through /etc/hosts.",
-        ),
+        Progress::NotStarted => ("Connect to Habbo", WORDING.not_started),
         Progress::At {
             mark: Mark::Failed(_),
             ..
@@ -41,10 +67,7 @@ fn header(progress: &Progress) -> (&'static str, &'static str) {
             "Setup stopped",
             "The step below failed. Nothing after it ran.",
         ),
-        Progress::At { .. } => (
-            "Getting set up",
-            "Re-signing happens once. The /etc/hosts redirect asks for your password every time.",
-        ),
+        Progress::At { .. } => ("Getting set up", WORDING.under_way),
     }
 }
 
@@ -126,7 +149,7 @@ fn crossfading_marker(p: &Paint, step: Step, mark: &Mark) -> El {
 fn failure(step: Step, reason: &str) -> String {
     let what = match step {
         Step::Prepare => "Couldn't re-sign Habbo.app",
-        Step::Allow => "Couldn't edit /etc/hosts",
+        Step::Allow => WORDING.allow_failed,
         Step::Open => "The session with Habbo failed",
     };
     format!("{what}: {reason}.")
@@ -146,11 +169,9 @@ fn prompt(s: &App, step: Step, mark: &Mark) -> Option<(String, Vec<El>)> {
             "Habbo.app is re-signed. The original is Habbo.bobba-original.app.".into(),
             vec![connect_button("Continue")],
         )),
-        (Step::Allow, Mark::WaitingOnPerson, _) => Some((
-            "macOS is asking for your password so Bobba can point Habbo's game servers at itself in /etc/hosts. The entries go away when Habbo connects."
-                .into(),
-            vec![abort_button("Cancel")],
-        )),
+        (Step::Allow, Mark::WaitingOnPerson, _) => {
+            Some((WORDING.asking.into(), vec![abort_button("Cancel")]))
+        }
         (Step::Open, Mark::WaitingOnPerson, Phase::WaitingForClient(hotels)) => Some((
             format!(
                 "Open the Habbo Launcher and press Play. Bobba is listening for {hotels} hotels."

@@ -10,6 +10,19 @@ use crate::hotels::{GAME_PORT, Redirect};
 
 const UPSTREAM_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
+fn reserved_port(address: SocketAddr, error: io::Error) -> io::Error {
+    if error.kind() != io::ErrorKind::PermissionDenied {
+        return error;
+    }
+    io::Error::new(
+        io::ErrorKind::PermissionDenied,
+        format!(
+            "the system reserves {address}; on Windows, Hyper-V, WSL or Docker may hold port {}",
+            address.port()
+        ),
+    )
+}
+
 pub struct HotelListeners {
     listeners: Vec<(Redirect, TcpListener)>,
     upstream_port: u16,
@@ -27,7 +40,10 @@ impl HotelListeners {
     ) -> io::Result<Self> {
         let mut listeners = Vec::with_capacity(redirects.len());
         for redirect in redirects {
-            let listener = TcpListener::bind(SocketAddr::from((redirect.loopback, port))).await?;
+            let address = SocketAddr::from((redirect.loopback, port));
+            let listener = TcpListener::bind(address)
+                .await
+                .map_err(|error| reserved_port(address, error))?;
             listeners.push((redirect.clone(), listener));
         }
         Ok(Self {

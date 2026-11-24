@@ -8,7 +8,10 @@ pub enum Step {
 }
 
 impl Step {
-    pub const ALL: [Step; 3] = [Step::Prepare, Step::Allow, Step::Open];
+    #[cfg(target_os = "macos")]
+    pub const ALL: &[Step] = &[Step::Prepare, Step::Allow, Step::Open];
+    #[cfg(not(target_os = "macos"))]
+    pub const ALL: &[Step] = &[Step::Allow, Step::Open];
 
     pub fn index(self) -> usize {
         Self::ALL.iter().position(|s| *s == self).unwrap_or(0)

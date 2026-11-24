@@ -203,7 +203,7 @@ fn actions(p: &Paint, s: &App, layer: &mut Vec<El>) -> El {
             Button::new(label)
                 .variant(ButtonVariant::Contrast)
                 .control_size(ControlSize::Large)
-                .shortcut("⌘↩")
+                .shortcut("cmd+enter")
                 .disabled(target.is_none())
                 .on_press_tx(submit)
                 .build(k)
