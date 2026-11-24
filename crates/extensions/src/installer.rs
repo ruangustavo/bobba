@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -7,6 +8,7 @@ use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
 
 use crate::host::{ExtensionHost, PacketInfoLoader};
+use crate::java::{java_environment, java_with_javafx};
 
 const COOKIE_LENGTH: usize = 40;
 const SUFFIX_LENGTH: usize = 12;
@@ -36,17 +38,17 @@ impl Runtime {
     fn command(self, path: &Path) -> Command {
         match self {
             Runtime::Java => {
-                let mut command = Command::new("java");
+                let mut command = Command::new(resolve_program("java"));
                 command.arg("-jar").arg(path);
                 command
             }
             Runtime::Python => {
-                let mut command = Command::new("python3");
+                let mut command = Command::new(resolve_program("python3"));
                 command.arg(path);
                 command
             }
             Runtime::Node => {
-                let mut command = Command::new("node");
+                let mut command = Command::new(resolve_program("node"));
                 command.arg(path);
                 command
             }
@@ -339,6 +341,16 @@ pub fn launch<L: PacketInfoLoader>(
             command
         }
     };
+    if let Some(path) = search_path() {
+        command.env("PATH", path);
+    }
+    let program = PathBuf::from(command.as_std().get_program());
+    if is_java(&program.to_string_lossy()) {
+        command.envs(java_environment(
+            &program,
+            std::env::var_os("JDK_JAVA_OPTIONS"),
+        ));
+    }
     let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -369,13 +381,119 @@ fn resolve_with(program: &str, available: impl Fn(&str) -> bool) -> String {
     program.to_owned()
 }
 
-pub fn resolve_program(program: &str) -> String {
-    resolve_with(program, program_available)
+pub fn resolve_program(program: &str) -> PathBuf {
+    let name = resolve_with(program, |name| locate(name).is_some());
+    let located = locate(&name);
+    if is_java(&name) {
+        return java_with_javafx(located.clone())
+            .or(located)
+            .unwrap_or_else(|| PathBuf::from(name));
+    }
+    located.unwrap_or_else(|| PathBuf::from(name))
 }
 
 pub fn program_available(program: &str) -> bool {
-    which::which(program).is_ok()
+    let name = resolve_with(program, |name| locate(name).is_some());
+    let located = locate(&name);
+    if is_java(&name) {
+        return java_with_javafx(located).is_some();
+    }
+    located.is_some()
 }
+
+fn locate(program: &str) -> Option<PathBuf> {
+    let cwd = std::env::current_dir().unwrap_or_default();
+    which::which_in(program, search_path(), cwd).ok()
+}
+
+#[cfg(not(target_os = "windows"))]
+fn search_path() -> Option<OsString> {
+    std::env::var_os("PATH")
+}
+
+#[cfg(target_os = "windows")]
+fn search_path() -> Option<OsString> {
+    use windows_sys::Win32::System::Registry::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
+    let inherited = std::env::var_os("PATH");
+    let entries: Vec<PathBuf> = [
+        registry_path(
+            HKEY_LOCAL_MACHINE,
+            r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment",
+        ),
+        registry_path(HKEY_CURRENT_USER, "Environment"),
+        inherited.clone(),
+    ]
+    .into_iter()
+    .flatten()
+    .flat_map(|paths| std::env::split_paths(&paths).collect::<Vec<_>>())
+    .collect();
+    std::env::join_paths(entries).ok().or(inherited)
+}
+
+#[cfg(target_os = "windows")]
+fn registry_path(root: windows_sys::Win32::System::Registry::HKEY, key: &str) -> Option<OsString> {
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    use windows_sys::Win32::System::Registry::{RRF_RT_REG_SZ, RegGetValueW};
+    let wide = |text: &str| -> Vec<u16> {
+        std::ffi::OsStr::new(text)
+            .encode_wide()
+            .chain([0])
+            .collect()
+    };
+    let key = wide(key);
+    let value = wide("Path");
+    let mut size: u32 = 0;
+    let status = unsafe {
+        RegGetValueW(
+            root,
+            key.as_ptr(),
+            value.as_ptr(),
+            RRF_RT_REG_SZ,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut size,
+        )
+    };
+    if status != 0 || size == 0 {
+        return None;
+    }
+    let mut buffer = vec![0u16; (size as usize).div_ceil(2)];
+    let status = unsafe {
+        RegGetValueW(
+            root,
+            key.as_ptr(),
+            value.as_ptr(),
+            RRF_RT_REG_SZ,
+            std::ptr::null_mut(),
+            buffer.as_mut_ptr().cast(),
+            &mut size,
+        )
+    };
+    if status != 0 {
+        return None;
+    }
+    let length = buffer
+        .iter()
+        .position(|&unit| unit == 0)
+        .unwrap_or(buffer.len());
+    Some(OsString::from_wide(&buffer[..length]))
+}
+
+fn is_java(program: &str) -> bool {
+    Path::new(program)
+        .file_stem()
+        .is_some_and(|stem| stem.eq_ignore_ascii_case("java"))
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn hide_console(command: &mut std::process::Command) {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    command.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(target_os = "windows"))]
+pub(crate) fn hide_console(_: &mut std::process::Command) {}
 
 async fn forward_lines(
     stream: impl tokio::io::AsyncRead + Unpin,

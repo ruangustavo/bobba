@@ -109,7 +109,7 @@ fn action(listing: &Listing, status: &ListingStatus) -> El {
                 .help(format!(
                     "{} needs {}. Opens its install guide.",
                     listing.title,
-                    first.name()
+                    first.requirement()
                 ))
                 .on_press_tx(move |_: &mut App, tx: &mut Tx| {
                     let _ = tx.open_url(guide);
@@ -127,11 +127,11 @@ fn action(listing: &Listing, status: &ListingStatus) -> El {
 fn missing(first: Runtime, rest: &[Runtime]) -> (String, bool) {
     let names: Vec<&str> = std::iter::once(first)
         .chain(rest.iter().copied())
-        .map(Runtime::name)
+        .map(Runtime::requirement)
         .collect();
     let joined = match names.split_last() {
         Some((last, init)) if !init.is_empty() => format!("{} and {last}", init.join(", ")),
-        _ => first.name().to_owned(),
+        _ => first.requirement().to_owned(),
     };
     (joined, !rest.is_empty())
 }

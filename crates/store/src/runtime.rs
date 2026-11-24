@@ -18,6 +18,13 @@ impl Runtime {
         }
     }
 
+    pub fn requirement(self) -> &'static str {
+        match self {
+            Runtime::Java => "Java with JavaFX",
+            other => other.name(),
+        }
+    }
+
     pub fn program(self) -> &'static str {
         match self {
             Runtime::Java => "java",
@@ -29,7 +36,7 @@ impl Runtime {
 
     pub fn guide(self) -> &'static str {
         match self {
-            Runtime::Java => "https://adoptium.net/",
+            Runtime::Java => "https://www.azul.com/downloads/?package=jdk-fx#zulu",
             Runtime::NodeJs => "https://nodejs.org/en/download",
             Runtime::Python => "https://www.python.org/downloads/",
             Runtime::DotNet => "https://dotnet.microsoft.com/download",

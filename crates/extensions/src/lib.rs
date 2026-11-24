@@ -1,6 +1,7 @@
 pub mod host;
 pub mod import;
 pub mod installer;
+pub mod java;
 pub mod processes;
 pub mod server;
 
