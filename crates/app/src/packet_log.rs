@@ -90,11 +90,12 @@ pub fn fields_of(packet: &Packet) -> Vec<Field> {
     let mut fields = Vec::new();
     for code in predict_structure(packet).chars() {
         let field = match code {
-            's' => reader.read_string().map(|text| Field {
+            's' => reader.read_string_bytes().map(|bytes| Field {
                 kind: FieldKind::Text,
                 value: format!(
                     "\"{}\"",
-                    text.replace('\\', "\\\\")
+                    String::from_utf8_lossy(bytes)
+                        .replace('\\', "\\\\")
                         .replace('"', "\\\"")
                         .replace('\r', "\\r")
                 ),

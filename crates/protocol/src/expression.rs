@@ -251,7 +251,7 @@ fn parse_string(chars: &[char], pos: usize, out: &mut Vec<u8>) -> Result<usize, 
             (None, _) => return Err(ExpressionError::UnterminatedString(pos)),
         }
     }
-    let encoded = latin1::encode(&text);
+    let encoded = text.as_bytes();
     let len = u16::try_from(encoded.len()).unwrap_or(u16::MAX);
     out.extend(len.to_be_bytes());
     out.extend_from_slice(&encoded[..usize::from(len)]);
@@ -327,7 +327,7 @@ fn write_structure(
                 out.push_str(&format!("{{i:{previous_int}}}"));
             }
             's' => {
-                let text = reader.read_string()?;
+                let text = String::from_utf8_lossy(reader.read_string_bytes()?);
                 let escaped = text
                     .replace('\\', "\\\\")
                     .replace('"', "\\\"")
@@ -385,6 +385,17 @@ mod tests {
     fn string_escapes_match_gearth() {
         let p = complete(r#"{h:1}{s:"a\"b\\c\rd"}"#);
         assert_eq!(p.reader().read_string().as_deref(), Ok("a\"b\\c\rd"));
+    }
+
+    #[test]
+    fn strings_are_utf8_like_gearth() {
+        let p = complete(r#"{h:1}{s:"você 王"}"#);
+        assert_eq!(p.reader().read_string_bytes(), Ok("você 王".as_bytes()));
+        let label = HeaderLabel::Id(1);
+        assert_eq!(
+            expression_from_structure(&p, "s", label),
+            Ok(r#"{h:1}{s:"você 王"}"#.to_owned())
+        );
     }
 
     #[test]
