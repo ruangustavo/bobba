@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/protocol", "crates/session", "crates/extensions", "crates/sulek", "crates/app", "crates/intercept", "crates/bench"]
+members = ["crates/protocol", "crates/session", "crates/extensions", "crates/sulek", "crates/store", "crates/app", "crates/intercept", "crates/bench"]
 
 [workspace.package]
 edition = "2024"
@@ -23,6 +23,7 @@ tempfile = "3"
 zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 bobba-extensions = { path = "crates/extensions" }
 bobba-sulek = { path = "crates/sulek" }
+bobba-store = { path = "crates/store" }
 bobba-intercept = { path = "crates/intercept" }
 rune = { git = "https://github.com/anomalyco/rune", rev = "0ca3fd741192fa6e79e6da057e513c8cfd1b4669", features = ["native-file-dialog"] }
 rune-kit = { git = "https://github.com/anomalyco/rune", rev = "0ca3fd741192fa6e79e6da057e513c8cfd1b4669", default-features = false }
