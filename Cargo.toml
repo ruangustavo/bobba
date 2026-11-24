@@ -31,7 +31,7 @@ rune = { git = "https://github.com/anomalyco/rune", rev = "0ca3fd741192fa6e79e6d
 rune-kit = { git = "https://github.com/anomalyco/rune", rev = "0ca3fd741192fa6e79e6da057e513c8cfd1b4669", default-features = false }
 libc = "0.2"
 mach2 = "0.7"
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Diagnostics_Debug", "Win32_System_Memory", "Win32_System_Threading", "Win32_System_Registry"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Diagnostics_Debug", "Win32_System_Memory", "Win32_System_Threading", "Win32_System_SystemInformation", "Win32_System_Registry", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 bobba-protocol = { path = "crates/protocol" }
 bobba-session = { path = "crates/session" }
 

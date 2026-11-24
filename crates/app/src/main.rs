@@ -1,7 +1,11 @@
+use std::ffi::OsString;
+use std::process::ExitCode;
+
 use bobba::backend::{Backend, DirectTarget, UiSink};
 use bobba::scenes::SCENES;
 use bobba::state::App;
 use bobba::view::chrome::TITLEBAR_HEIGHT;
+use bobba_intercept::hosts;
 use rune::{AppSpec, Titlebar, Waker};
 
 const WINDOW: (f32, f32) = (760.0, 540.0);
@@ -19,7 +23,13 @@ fn setup(s: &mut App, wake: Waker) {
     }
 }
 
-fn main() {
+fn main() -> ExitCode {
+    let arguments: Vec<OsString> = std::env::args_os().collect();
+    if let Some((command, rest)) = arguments.get(1..).and_then(<[OsString]>::split_first)
+        && command == hosts::HELPER_COMMAND
+    {
+        return hosts::serve(rest);
+    }
     rune::App::new(AppSpec {
         min_size: Some((680.0, 480.0)),
         scenes: SCENES,
@@ -30,4 +40,5 @@ fn main() {
     })
     .titlebar(Titlebar::new(TITLEBAR_HEIGHT))
     .run();
+    ExitCode::SUCCESS
 }
