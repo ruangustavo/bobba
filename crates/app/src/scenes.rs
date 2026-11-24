@@ -244,11 +244,16 @@ fn store_listing(
     framework: &str,
     rating: u32,
 ) -> String {
+    let program = if framework == "G-Node" {
+        "node"
+    } else {
+        "java"
+    };
     format!(
         r#"{{"title": "{title}", "description": "{description}", "authors": [{{"name": "pixelmint"}}],
             "version": "{version}", "categories": ["{category}"], "source": "https://example.test/{rating}",
             "framework": {{"name": "{framework}"}}, "rating": {rating}, "updateDate": "12-11-2026 10:00:00",
-            "commands": {{"default": ["java", "-jar", "extension.jar"]}},
+            "commands": {{"default": ["{program}", "extension"]}},
             "compatibility": {{"systems": ["Mac", "Windows", "Linux"], "clients": ["Flash"]}}}}"#
     )
 }
@@ -320,6 +325,7 @@ fn store(s: &mut App) {
             origin: Origin::Fresh,
         });
     }
+    s.store.refresh_programs(|program| program != "node");
     s.store.showing = Showing::Store;
 }
 

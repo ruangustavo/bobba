@@ -20,6 +20,7 @@ dirs = "6"
 getrandom = "0.3"
 rayon = "1"
 tempfile = "3"
+which = "8"
 zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 bobba-extensions = { path = "crates/extensions" }
 bobba-sulek = { path = "crates/sulek" }

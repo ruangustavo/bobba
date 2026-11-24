@@ -334,7 +334,7 @@ pub fn launch<L: PacketInfoLoader>(
                     "the extension has no command",
                 ));
             };
-            let mut command = Command::new(resolve_program(program, on_path));
+            let mut command = Command::new(resolve_program(program));
             command.args(rest).current_dir(package.files());
             command
         }
@@ -354,23 +354,27 @@ pub fn launch<L: PacketInfoLoader>(
     Ok(child)
 }
 
-fn resolve_program(program: &str, available: impl Fn(&str) -> bool) -> &str {
-    if program == "python" && !available("python") && available("python3") {
-        return "python3";
+#[cfg(target_os = "windows")]
+const PYTHON_ALTERNATIVES: &[&str] = &["py", "python3"];
+#[cfg(not(target_os = "windows"))]
+const PYTHON_ALTERNATIVES: &[&str] = &["python3"];
+
+fn resolve_with(program: &str, available: impl Fn(&str) -> bool) -> String {
+    if program == "python"
+        && !available(program)
+        && let Some(alternative) = PYTHON_ALTERNATIVES.iter().find(|name| available(name))
+    {
+        return (*alternative).to_owned();
     }
-    program
+    program.to_owned()
 }
 
-fn on_path(program: &str) -> bool {
-    let Some(paths) = std::env::var_os("PATH") else {
-        return false;
-    };
-    let names: Vec<String> = if cfg!(windows) {
-        vec![program.to_owned(), format!("{program}.exe")]
-    } else {
-        vec![program.to_owned()]
-    };
-    std::env::split_paths(&paths).any(|dir| names.iter().any(|name| dir.join(name).is_file()))
+pub fn resolve_program(program: &str) -> String {
+    resolve_with(program, program_available)
+}
+
+pub fn program_available(program: &str) -> bool {
+    which::which(program).is_ok()
 }
 
 async fn forward_lines(
@@ -560,13 +564,14 @@ mod tests {
     }
 
     #[test]
-    fn python_falls_back_to_python3_only_when_python_is_missing() {
-        let only_python3 = |name: &str| name == "python3";
-        let both = |name: &str| name == "python" || name == "python3";
-        assert_eq!(resolve_program("python", only_python3), "python3");
-        assert_eq!(resolve_program("python", both), "python");
-        assert_eq!(resolve_program("python", |_| false), "python");
-        assert_eq!(resolve_program("java", only_python3), "java");
+    fn python_falls_back_to_this_system_s_launcher_only_when_python_is_missing() {
+        let fallback = PYTHON_ALTERNATIVES[0];
+        let only_fallback = |name: &str| name == fallback;
+        let both = |name: &str| name == "python" || name == fallback;
+        assert_eq!(resolve_with("python", only_fallback), fallback);
+        assert_eq!(resolve_with("python", both), "python");
+        assert_eq!(resolve_with("python", |_| false), "python");
+        assert_eq!(resolve_with("java", only_fallback), "java");
     }
 
     #[test]

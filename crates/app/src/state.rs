@@ -16,6 +16,8 @@ use crate::log_feed::LogFeed;
 use crate::recent::{self, Recent};
 use crate::repeat::{Interval, Repeats};
 use crate::setup::{Progress, Step};
+use bobba_extensions::{program_available, resolve_program};
+
 use crate::store::{CatalogState, Showing, StoreState};
 
 const CONSOLE_LIMIT: usize = 500;
@@ -243,7 +245,10 @@ impl App {
             UiEvent::Notice(text) => self.log_console(text),
             UiEvent::Automatic(step) => self.handle_step(step),
             UiEvent::Failed(reason) => self.phase = Phase::Failed(reason),
-            UiEvent::Catalog(event) => self.store.handle_catalog(event),
+            UiEvent::Catalog(event) => {
+                self.store.handle_catalog(event);
+                self.refresh_programs();
+            }
             UiEvent::StoreInstall { title, progress } => self.store.handle_install(title, progress),
         }
     }
@@ -405,7 +410,13 @@ impl App {
         self.store.showing = showing;
         if showing == Showing::Store {
             self.load_store();
+            self.refresh_programs();
         }
+    }
+
+    fn refresh_programs(&mut self) {
+        self.store
+            .refresh_programs(|program| program_available(&resolve_program(program)));
     }
 
     pub fn load_store(&mut self) {

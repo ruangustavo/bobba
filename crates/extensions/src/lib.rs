@@ -8,6 +8,6 @@ pub use host::{
 };
 pub use installer::{
     ExtensionOutput, InstallError, InstalledExtension, Installer, Package, Runtime, SingleFile,
-    launch,
+    launch, program_available, resolve_program,
 };
 pub use server::serve;

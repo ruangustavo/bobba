@@ -102,6 +102,33 @@ fn action(listing: &Listing, status: &ListingStatus) -> El {
             .variant(ButtonVariant::Outline)
             .on_press(install(&listing.title))
             .build(k),
+        ListingStatus::NeedsRuntime {
+            runtime,
+            guide: Some(guide),
+        } => {
+            let guide = guide.clone();
+            Button::new(format!("Get {runtime}"))
+                .variant(ButtonVariant::Outline)
+                .help(format!(
+                    "{} needs {runtime}. Opens its install guide.",
+                    listing.title
+                ))
+                .on_press_tx(move |_: &mut App, tx: &mut Tx| {
+                    let _ = tx.open_url(&guide);
+                })
+                .build(k)
+        }
+        ListingStatus::NeedsRuntime {
+            runtime,
+            guide: None,
+        } => Button::new("Install")
+            .variant(ButtonVariant::Outline)
+            .help(format!(
+                "{} needs {runtime}, which Bobba could not find.",
+                listing.title
+            ))
+            .on_press(install(&listing.title))
+            .build(k),
         ListingStatus::Failed(_) => Button::new("Try again")
             .variant(ButtonVariant::Outline)
             .on_press(install(&listing.title))
@@ -123,6 +150,13 @@ fn notice(listing: &Listing, status: &ListingStatus) -> Option<El> {
             ),
         ),
         ListingStatus::Failed(reason) => (&ALERT, p.red, format!("Could not install: {reason}")),
+        ListingStatus::NeedsRuntime { runtime, .. } => (
+            &ALERT,
+            p.amber,
+            format!(
+                "Needs {runtime}, which is not installed on this computer. Install it, then come back to install this extension."
+            ),
+        ),
         _ => return None,
     };
     Some(
@@ -148,6 +182,9 @@ fn listing_row(s: &App, listing: &Listing, selected: bool) -> El {
     let status = s.store.status(listing, &s.installed);
     let subtitle = match &status {
         ListingStatus::Failed(reason) => text(format!("Could not install: {reason}")).color(p.red),
+        ListingStatus::NeedsRuntime { runtime, .. } => {
+            text(format!("Needs {runtime}, which is not installed")).color(p.amber)
+        }
         _ => text(listing.description.clone()).color(k.c.text_muted),
     };
     let title = listing.title.clone();

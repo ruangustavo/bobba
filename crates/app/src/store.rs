@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use bobba_store::{Catalog, Listing, Origin, is_newer};
 use rune::TextEdit;
@@ -24,7 +24,13 @@ pub enum ListingStatus {
     Available,
     Downloading,
     Installed,
-    Update { installed: String },
+    Update {
+        installed: String,
+    },
+    NeedsRuntime {
+        runtime: String,
+        guide: Option<String>,
+    },
     Failed(String),
 }
 
@@ -35,6 +41,7 @@ pub struct StoreState {
     pub category: Option<String>,
     pub query: TextEdit,
     installs: HashMap<String, StoreInstall>,
+    missing_programs: HashSet<String>,
 }
 
 impl Default for StoreState {
@@ -46,6 +53,7 @@ impl Default for StoreState {
             category: None,
             query: TextEdit::new(""),
             installs: HashMap::new(),
+            missing_programs: HashSet::new(),
         }
     }
 }
@@ -67,6 +75,23 @@ impl StoreState {
                 self.installs.insert(title, progress);
             }
         }
+    }
+
+    pub fn refresh_programs(&mut self, available: impl Fn(&str) -> bool) {
+        let programs: HashSet<String> = self
+            .catalog()
+            .map(|catalog| {
+                catalog
+                    .listings
+                    .iter()
+                    .filter_map(|l| l.command.first().cloned())
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.missing_programs = programs
+            .into_iter()
+            .filter(|program| !available(program))
+            .collect();
     }
 
     pub fn needs_catalog(&self) -> bool {
@@ -127,7 +152,18 @@ impl StoreState {
                 ListingStatus::Update { installed: version }
             }
             Some(_) => ListingStatus::Installed,
-            None => ListingStatus::Available,
+            None => match listing.command.first() {
+                Some(program) if self.missing_programs.contains(program) => {
+                    ListingStatus::NeedsRuntime {
+                        runtime: runtime_name(program),
+                        guide: self
+                            .catalog()
+                            .and_then(|c| c.framework(&listing.framework))
+                            .and_then(|f| f.instructions.clone()),
+                    }
+                }
+                _ => ListingStatus::Available,
+            },
         }
     }
 
@@ -135,6 +171,21 @@ impl StoreState {
         self.catalog()?
             .listing(title)
             .filter(|listing| is_newer(&listing.version, version))
+    }
+}
+
+fn runtime_name(program: &str) -> String {
+    let stem = std::path::Path::new(program)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(program)
+        .to_ascii_lowercase();
+    match stem.as_str() {
+        "java" | "javaw" => "Java".into(),
+        "node" => "Node.js".into(),
+        "python" | "python3" | "py" => "Python".into(),
+        "dotnet" => ".NET".into(),
+        _ => program.into(),
     }
 }
 
@@ -231,6 +282,28 @@ mod tests {
         );
         store.category = Some("Trading".into());
         assert_eq!(store.open_detail(&store.visible()), None);
+    }
+
+    #[test]
+    fn a_listing_whose_program_is_missing_points_to_its_runtime() {
+        let mut store = loaded();
+        let mapper = store.catalog().expect("loaded").listings[0].clone();
+
+        store.refresh_programs(|program| program != "java");
+        assert_eq!(
+            store.status(&mapper, &[]),
+            ListingStatus::NeedsRuntime {
+                runtime: "Java".into(),
+                guide: None,
+            }
+        );
+        assert_eq!(
+            store.status(&mapper, &[package("Room Mapper", "2.0.1")]),
+            ListingStatus::Installed
+        );
+
+        store.refresh_programs(|_| true);
+        assert_eq!(store.status(&mapper, &[]), ListingStatus::Available);
     }
 
     #[test]
