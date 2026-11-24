@@ -199,7 +199,7 @@ fn hero(p: &Paint, s: &App) -> Hero {
                 tint: Some(p.amber),
                 progress: Some(0),
                 title: "Habbo.app needs a one-time re-sign".into(),
-                body: "So G-MemZ can read Habbo's encryption key. The original is kept as Habbo.bobba-original.app.".into(),
+                body: "So Bobba can read Habbo's encryption key from its memory. The original is kept as Habbo.bobba-original.app.".into(),
                 actions: vec![
                     button("Not now", ButtonVariant::Ghost, "resign-cancel", App::abort),
                     button("Re-sign Habbo.app", ButtonVariant::Contrast, "resign", move |s: &mut App| {

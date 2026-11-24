@@ -5,12 +5,18 @@ version.workspace = true
 license.workspace = true
 
 [dependencies]
+bobba-protocol.workspace = true
 bobba-session.workspace = true
 dirs.workspace = true
-reqwest.workspace = true
-sha2.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc.workspace = true
+mach2.workspace = true
+
+[target."cfg(windows)".dependencies]
+windows-sys.workspace = true

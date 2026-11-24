@@ -21,7 +21,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::interceptor::{ConnectionInfo, Interceptor, Verdict};
 use crate::log::{LogEntry, Outcome};
-use crate::table_source::TableSource;
+use crate::table_source::{TableSource, TablesUnavailable};
 
 const UPSTREAM_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const READ_BUFFER_SIZE: usize = 64 * 1024;
@@ -105,8 +105,14 @@ pub enum SessionEvent {
         candidates: usize,
         elapsed: Duration,
     },
-    KeyRecoveryFailed,
+    KeyRecoveryFailed(KeyRecoveryFailure),
     Ended,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KeyRecoveryFailure {
+    TablesUnavailable(TablesUnavailable),
+    NoMatchingKey,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -455,8 +461,14 @@ impl<I: Interceptor> Reader<I> {
     async fn recover_key(&mut self) -> Flow {
         let started = Instant::now();
         for _ in 0..KEY_RECOVERY_ATTEMPTS {
-            let Some(tables) = self.scan_while_reading().await else {
-                return Flow::Stop;
+            let tables = match self.scan_while_reading().await {
+                Some(Ok(tables)) => tables,
+                Some(Err(unavailable)) => {
+                    return self
+                        .fail_recovery(KeyRecoveryFailure::TablesUnavailable(unavailable))
+                        .await;
+                }
+                None => return Flow::Stop,
             };
             self.drain_ready_bytes();
             let Decryption::AwaitingKey { encrypted, .. } = &self.decryption else {
@@ -491,10 +503,10 @@ impl<I: Interceptor> Reader<I> {
             };
             return self.settle_probation(false).await;
         }
-        self.fail_recovery().await
+        self.fail_recovery(KeyRecoveryFailure::NoMatchingKey).await
     }
 
-    async fn scan_while_reading(&mut self) -> Option<Vec<SBox>> {
+    async fn scan_while_reading(&mut self) -> Option<Result<Vec<SBox>, TablesUnavailable>> {
         let source = self.shared.tables.clone();
         let mut scan = source.tables();
         loop {
@@ -533,9 +545,11 @@ impl<I: Interceptor> Reader<I> {
             ProbationVerdict::Undecided(_) if !out_of_time => return Flow::Continue,
             ProbationVerdict::Undecided(_) => match probation.best_guess() {
                 Some(fresh) => fresh,
-                None => return self.fail_recovery().await,
+                None => return self.fail_recovery(KeyRecoveryFailure::NoMatchingKey).await,
             },
-            ProbationVerdict::Failed => return self.fail_recovery().await,
+            ProbationVerdict::Failed => {
+                return self.fail_recovery(KeyRecoveryFailure::NoMatchingKey).await;
+            }
         };
         let Decryption::Probation { encrypted, .. } =
             std::mem::replace(&mut self.decryption, Decryption::Plain)
@@ -550,8 +564,11 @@ impl<I: Interceptor> Reader<I> {
         Box::pin(self.start_decrypting(chosen)).await
     }
 
-    async fn fail_recovery(&mut self) -> Flow {
-        let _ = self.shared.events.send(SessionEvent::KeyRecoveryFailed);
+    async fn fail_recovery(&mut self, failure: KeyRecoveryFailure) -> Flow {
+        let _ = self
+            .shared
+            .events
+            .send(SessionEvent::KeyRecoveryFailed(failure));
         self.shared.handle.abort();
         Flow::Stop
     }

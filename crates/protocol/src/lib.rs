@@ -9,6 +9,7 @@ pub mod packet;
 pub mod packet_info;
 pub mod prediction;
 pub mod rc4;
+pub mod table_scan;
 
 pub use direction::Direction;
 pub use expression::{Expression, ExpressionError};

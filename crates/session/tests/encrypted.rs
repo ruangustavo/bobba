@@ -5,8 +5,8 @@ use bobba_protocol::key_recovery::SBox;
 use bobba_protocol::{Direction, Framer, HMessage, Packet, Rc4};
 use bobba_session::table_source::TablesFuture;
 use bobba_session::{
-    ConnectionInfo, DirectProxy, Interceptor, LogEntry, Outcome, SessionEvent, SessionHandle,
-    TableSource, Upstream, Verdict,
+    ConnectionInfo, DirectProxy, Interceptor, KeyRecoveryFailure, LogEntry, Outcome, SessionEvent,
+    SessionHandle, TableSource, TablesUnavailable, Upstream, Verdict,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -25,7 +25,17 @@ impl TableSource for ClientMemory {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .as_ref()
             .map(|cipher| *cipher.state());
-        Box::pin(std::future::ready(table.into_iter().collect()))
+        Box::pin(std::future::ready(Ok(table.into_iter().collect())))
+    }
+}
+
+struct UnreadableMemory;
+
+impl TableSource for UnreadableMemory {
+    fn tables(&self) -> TablesFuture<'_> {
+        Box::pin(std::future::ready(Err(TablesUnavailable(
+            "Habbo isn't running".into(),
+        ))))
     }
 }
 
@@ -110,6 +120,13 @@ struct Handshaken {
 }
 
 async fn handshake(server_encrypts: bool) -> Handshaken {
+    handshake_reading(server_encrypts, |cipher| Arc::new(ClientMemory(cipher))).await
+}
+
+async fn handshake_reading(
+    server_encrypts: bool,
+    memory: impl FnOnce(Arc<Mutex<Option<Rc4>>>) -> Arc<dyn TableSource>,
+) -> Handshaken {
     let hotel_listener = TcpListener::bind("127.0.0.1:0").await.expect("binds");
     let upstream = Upstream {
         host: "127.0.0.1".into(),
@@ -128,7 +145,7 @@ async fn handshake(server_encrypts: bool) -> Handshaken {
     let (log_tx, log) = mpsc::channel(1024);
     let (handle, _) = session.expect("session").start(
         Arc::new(BlockShout),
-        Arc::new(ClientMemory(client_cipher.clone())),
+        memory(client_cipher.clone()),
         events_tx,
         log_tx,
     );
@@ -290,4 +307,29 @@ async fn server_side_encryption_reuses_the_same_fresh_key() {
 
     h.client.decrypt = Rc4::new(KEY);
     assert_eq!(h.client.next().await, welcome);
+}
+
+#[tokio::test]
+async fn unreadable_memory_fails_recovery_with_the_reason() {
+    let mut h = handshake_reading(false, |_| Arc::new(UnreadableMemory)).await;
+    let login = Packet::builder(3226).string("sso-ticket").i32(1).build();
+    let walk = Packet::builder(3320).i32(3).i32(4).build();
+    for packet in [&login, &walk, &login] {
+        write_encrypted(&mut h.client.stream, &h.client_cipher, packet).await;
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let failure = loop {
+        match tokio::time::timeout(TIMEOUT, h.events.recv())
+            .await
+            .expect("event")
+            .expect("open")
+        {
+            SessionEvent::KeyRecoveryFailed(failure) => break failure,
+            _ => continue,
+        }
+    };
+    assert_eq!(
+        failure,
+        KeyRecoveryFailure::TablesUnavailable(TablesUnavailable("Habbo isn't running".into()))
+    );
 }

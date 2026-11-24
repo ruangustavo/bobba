@@ -8,7 +8,7 @@ use std::time::Duration;
 use bobba_extensions::{ExtensionId, HostEvent, Permission, PermissionRequest};
 use bobba_protocol::extension_message::ExtensionInfo;
 use bobba_protocol::{Direction, PacketInfo};
-use bobba_session::{ConnectionInfo, LogEntry, SessionEvent, Upstream};
+use bobba_session::{ConnectionInfo, KeyRecoveryFailure, LogEntry, SessionEvent, Upstream};
 use rune::TextEdit;
 use rune_kit::TableState;
 
@@ -231,7 +231,10 @@ impl App {
                     elapsed,
                 };
             }
-            SessionEvent::KeyRecoveryFailed => {
+            SessionEvent::KeyRecoveryFailed(KeyRecoveryFailure::TablesUnavailable(reason)) => {
+                self.phase = Phase::Failed(format!("Couldn't read Habbo's memory: {reason}"));
+            }
+            SessionEvent::KeyRecoveryFailed(KeyRecoveryFailure::NoMatchingKey) => {
                 self.phase = Phase::Failed("Could not find Habbo's encryption key".into());
             }
             SessionEvent::Ended => {

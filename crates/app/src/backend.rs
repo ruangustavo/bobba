@@ -9,11 +9,10 @@ use bobba_extensions::{
     launch, serve,
 };
 use bobba_intercept::client::{self, ClientState};
-use bobba_intercept::{HOTEL_HOSTS, HostsRedirect, HotelListeners, gmemz, resolve_hotels};
+use bobba_intercept::{HOTEL_HOSTS, HostsRedirect, HotelListeners, MemoryScan, resolve_hotels};
 use bobba_protocol::extension_message::HostInfo;
 use bobba_session::{
-    DirectProxy, DumpFile, GMemZ, LogEntry, NoTables, SessionEvent, SessionHandle, TableSource,
-    Upstream,
+    DirectProxy, DumpFile, LogEntry, NoTables, SessionEvent, SessionHandle, TableSource, Upstream,
 };
 use bobba_sulek::Sulek;
 use tokio::net::TcpListener;
@@ -396,14 +395,6 @@ async fn connect(target: DirectTarget, host: Arc<Host>, ui: UiSink) {
 async fn connect_automatically(host: Arc<Host>, ui: UiSink) {
     let step = |text: &str| UiEvent::Automatic(AutomaticStep::Working(text.to_owned()));
     let fail = |text: String| UiEvent::Automatic(AutomaticStep::Failed(text));
-    ui.emit(step(
-        "Checking G-MemZ, which reads the encryption key from Habbo",
-    ));
-    let gmemz = gmemz::default_path();
-    if let Err(error) = gmemz::ensure_installed(&gmemz).await {
-        ui.emit(fail(error.to_string()));
-        return;
-    }
     ui.emit(step("Checking the Habbo client"));
     match client::client_state().await {
         ClientState::Ready(_) => {}
@@ -454,7 +445,7 @@ async fn connect_automatically(host: Arc<Host>, ui: UiSink) {
             return;
         }
     };
-    run_session(session, host, Arc::new(GMemZ { binary: gmemz }), ui).await;
+    run_session(session, host, Arc::new(MemoryScan), ui).await;
 }
 
 async fn prepare_client(app: PathBuf, ui: UiSink) {
