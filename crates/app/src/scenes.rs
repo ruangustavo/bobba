@@ -7,8 +7,11 @@ use bobba_protocol::extension_message::ExtensionInfo;
 use bobba_protocol::{Direction, Packet, PacketInfo, PacketInfoEntry};
 use bobba_session::{ConnectionInfo, LogEntry, Outcome};
 
-use crate::backend::{InstalledKind, InstalledState};
+use bobba_store::{Catalog, Origin, Os};
+
+use crate::backend::{CatalogEvent, InstalledKind, InstalledState};
 use crate::state::{App, KeyState, Mode, Phase, Tab, Traffic};
+use crate::store::Showing;
 
 const RELEASE: &str = "MAC63-202611201617-213322612";
 const HEADLESS_FLAGS: [&str; 7] = [
@@ -41,6 +44,7 @@ pub const SCENES: &[Scene] = &[
     ("manual", |s| s.mode = Mode::Manual),
     ("injection", injection),
     ("extensions", extensions),
+    ("store", store),
     ("permission", permission),
 ];
 
@@ -225,6 +229,98 @@ fn extensions(s: &mut App) {
     ] {
         s.log_console(line.into());
     }
+}
+
+const STORE_CONFIG: &str = r#"{"categories": [{"name": "Building"}, {"name": "Trading"},
+    {"name": "Usability"}, {"name": "Moderation"}, {"name": "G-Earth Utilities"}],
+    "frameworks": [{"name": "G-Node", "installation": {"required": true,
+    "instructions": "https://nodejs.org/en/download"}}]}"#;
+
+fn store_listing(
+    title: &str,
+    description: &str,
+    version: &str,
+    category: &str,
+    framework: &str,
+    rating: u32,
+) -> String {
+    format!(
+        r#"{{"title": "{title}", "description": "{description}", "authors": [{{"name": "pixelmint"}}],
+            "version": "{version}", "categories": ["{category}"], "source": "https://example.test/{rating}",
+            "framework": {{"name": "{framework}"}}, "rating": {rating}, "updateDate": "12-11-2026 10:00:00",
+            "commands": {{"default": ["java", "-jar", "extension.jar"]}},
+            "compatibility": {{"systems": ["Mac", "Windows", "Linux"], "clients": ["Flash"]}}}}"#
+    )
+}
+
+fn store(s: &mut App) {
+    extensions(s);
+    s.installed.push(InstalledState {
+        id: "Wired Helper_1.3.0".into(),
+        kind: InstalledKind::Package {
+            title: "Wired Helper".into(),
+            version: "1.3.0".into(),
+        },
+        running: true,
+    });
+    let listings = [
+        store_listing(
+            "Wired Helper",
+            "Reads the wired in your room and lets you copy a stack to another room, check which triggers fire, and step through effects one at a time.",
+            "1.4.2",
+            "Building",
+            "Native",
+            284,
+        ),
+        store_listing(
+            "Room Mapper",
+            "Draws the current room from above with every furni at its tile, ready to share or to rebuild the room somewhere else.",
+            "2.0.1",
+            "Building",
+            "G-Node",
+            231,
+        ),
+        store_listing(
+            "Trade Ledger",
+            "Logs each trade you confirm, values both sides with recent marketplace averages, and warns before you accept a lopsided offer.",
+            "0.9.4",
+            "Trading",
+            "Native",
+            196,
+        ),
+        store_listing(
+            "Chat Translator",
+            "Shows a translation under each chat bubble and can translate what you type before it is sent.",
+            "1.1.0",
+            "Usability",
+            "G-Python",
+            171,
+        ),
+        store_listing(
+            "Door Guard",
+            "Keeps an allow list for your room and kicks anyone else who walks in, with a log of who tried.",
+            "2.3.1",
+            "Moderation",
+            "Native",
+            64,
+        ),
+        store_listing(
+            "QX Scripter",
+            "Write small C# scripts against the room, the chat and your inventory, or start from scripts shared by the community.",
+            "0.1.41",
+            "G-Earth Utilities",
+            "QX",
+            148,
+        ),
+    ];
+    let extensions = format!("[{}]", listings.join(","));
+    if let Ok(catalog) = Catalog::parse(STORE_CONFIG, &extensions, Os::current()) {
+        s.store.handle_catalog(CatalogEvent::Loaded {
+            catalog,
+            origin: Origin::Fresh,
+        });
+    }
+    s.store.showing = Showing::Store;
 }
 
 fn permission(s: &mut App) {

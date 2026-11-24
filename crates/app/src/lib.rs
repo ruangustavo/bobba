@@ -10,7 +10,7 @@ pub mod state;
 pub mod store;
 pub mod view;
 
-use rune::Tx;
+use rune::{KeyEvent, Tx};
 
 use crate::state::App;
 
@@ -22,4 +22,8 @@ pub fn poll(s: &mut App, clock: f64, tx: &mut Tx) -> bool {
         tx.wake_at(due);
     }
     events || requests || repeats
+}
+
+pub fn on_key(s: &mut App, e: &KeyEvent, tx: &mut Tx) -> bool {
+    view::extensions::close_detail(s, e, tx)
 }

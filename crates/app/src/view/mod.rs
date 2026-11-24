@@ -6,6 +6,7 @@ pub mod logger;
 pub mod session;
 pub mod setup;
 pub mod skull;
+pub mod store;
 pub mod theme;
 
 use rune::{Cx, El, col, el};

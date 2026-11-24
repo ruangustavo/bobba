@@ -24,6 +24,7 @@ fn main() {
         scenes: SCENES,
         setup: Some(setup),
         poll: Some(bobba::poll),
+        on_key: Some(bobba::on_key),
         ..AppSpec::new("Bobba", WINDOW, App::new, bobba::view::root)
     })
     .titlebar(Titlebar::new(TITLEBAR_HEIGHT))

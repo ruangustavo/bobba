@@ -1,11 +1,14 @@
 use rune::tok::TextStyle;
-use rune::{Color, El, FileDialogOptions, Tx, col, el, row, text};
+use rune::{Color, El, FileDialogOptions, Key, KeyEvent, ScrollSpec, Tx, col, el, row, text};
 use rune_kit::{
     Badge, BadgeVariant, Button, ButtonVariant, ControlSize, IconButton, IconButtonVariant,
+    SegmentedControl,
 };
 
 use crate::backend::{Command, InstalledKind};
 use crate::state::App;
+use crate::store::Showing;
+use crate::view::store;
 use crate::view::theme::{Paint, paint};
 
 static PLAY: rune::Icon = rune::Icon {
@@ -136,13 +139,42 @@ pub fn view(s: &App) -> El {
             .variant(ButtonVariant::GhostMuted)
             .on_press(move |s: &mut App| s.send(Command::UninstallExtension(file.clone())))
             .build(k);
+        let update = match &state.kind {
+            InstalledKind::Package { title, version } => {
+                s.store.update_for(title, version).map(|listing| {
+                    let title = title.clone();
+                    Button::new(format!("Update to {}", listing.version))
+                        .variant(ButtonVariant::Outline)
+                        .on_press(move |s: &mut App| s.install_from_store(title.clone()))
+                        .build(k)
+                        .key(format!("installed-update-{}", state.id))
+                })
+            }
+            InstalledKind::Single(_) => None,
+        };
         items.push(item(
             p,
             format!("installed-{}", state.id),
             title,
             detail,
             dot(status_color),
-            vec![toggle, uninstall],
+            update.into_iter().chain([toggle, uninstall]).collect(),
+        ));
+    }
+    if s.installed.is_empty() && !s.extensions.iter().any(|(_, info)| info.file.is_none()) {
+        items.push(item(
+            p,
+            "extensions-empty".into(),
+            "No extensions yet".into(),
+            "The G-ExtensionStore has ready-made extensions for Flash".into(),
+            el(),
+            vec![
+                Button::new("Browse store")
+                    .variant(ButtonVariant::Contrast)
+                    .on_press(|s: &mut App| s.show(Showing::Store))
+                    .build(k)
+                    .key("extensions-empty-browse"),
+            ],
         ));
     }
     for (_, info) in s.extensions.iter().filter(|(_, info)| info.file.is_none()) {
@@ -179,6 +211,41 @@ pub fn view(s: &App) -> El {
             list.child(item)
         },
     );
+    let showing = s.store.showing;
+    let switch = SegmentedControl::new(
+        &["Installed", "Store"],
+        Some(usize::from(showing == Showing::Store)),
+    )
+    .label("Show")
+    .fit()
+    .on_pick(|s: &mut App, i, _| {
+        s.show(if i == 1 {
+            Showing::Store
+        } else {
+            Showing::Installed
+        })
+    })
+    .build(k)
+    .key("extensions-showing");
+    let install_from_file = (showing == Showing::Installed).then(|| {
+        Button::new("Install from file")
+            .variant(ButtonVariant::Outline)
+            .on_press_tx(install)
+            .build(k)
+            .key("install-from-file")
+    });
+    let body = match showing {
+        Showing::Installed => col()
+            .key("installed")
+            .w_full()
+            .grow(1.0)
+            .min_h(0.0)
+            .scroll(ScrollSpec {
+                stick_bottom: false,
+            })
+            .child(list),
+        Showing::Store => store::view(s),
+    };
     col()
         .key("extensions")
         .w_full()
@@ -194,20 +261,25 @@ pub fn view(s: &App) -> El {
                     col()
                         .gap(3.0)
                         .grow(1.0)
+                        .shrink()
                         .child(
                             text("Extensions")
                                 .font(TextStyle::new(20.0, 650.0))
                                 .color(k.c.text_base),
                         )
-                        .child(text(port).font(k.ty.body).color(k.c.text_muted)),
+                        .child(text(port).font(k.ty.body).color(k.c.text_muted).truncate()),
                 )
-                .child(
-                    Button::new("Install")
-                        .variant(ButtonVariant::Contrast)
-                        .on_press_tx(install)
-                        .build(k)
-                        .key("install-extension"),
-                ),
+                .children(install_from_file)
+                .child(switch),
         )
-        .child(list)
+        .child(body)
+}
+
+pub fn close_detail(s: &mut App, e: &KeyEvent, tx: &mut Tx) -> bool {
+    if e.key != Key::Escape || s.store.detail.is_none() {
+        return false;
+    }
+    s.store.detail = None;
+    tx.instant();
+    true
 }

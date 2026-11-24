@@ -16,7 +16,7 @@ use crate::log_feed::LogFeed;
 use crate::recent::{self, Recent};
 use crate::repeat::{Interval, Repeats};
 use crate::setup::{Progress, Step};
-use crate::store::StoreState;
+use crate::store::{CatalogState, Showing, StoreState};
 
 const CONSOLE_LIMIT: usize = 500;
 pub const DEFAULT_HOTEL: &str = "game-br.habbo.com";
@@ -399,6 +399,32 @@ impl App {
         if let Some(request) = self.permission_requests.pop_front() {
             let _ = request.respond.send(permission);
         }
+    }
+
+    pub fn show(&mut self, showing: Showing) {
+        self.store.showing = showing;
+        if showing == Showing::Store {
+            self.load_store();
+        }
+    }
+
+    pub fn load_store(&mut self) {
+        if self.store.needs_catalog() {
+            self.store.catalog = CatalogState::Loading;
+            self.send(Command::BrowseStore);
+        }
+    }
+
+    pub fn toggle_store_detail(&mut self, title: &str) {
+        self.store.detail = if self.store.detail.as_deref() == Some(title) {
+            None
+        } else {
+            Some(title.to_owned())
+        };
+    }
+
+    pub fn install_from_store(&mut self, title: String) {
+        self.send(Command::InstallFromStore(title));
     }
 
     pub fn open_logger(&mut self) {

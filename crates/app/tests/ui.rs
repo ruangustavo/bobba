@@ -1,8 +1,9 @@
-use bobba::backend::{AutomaticStep, UiEvent};
+use bobba::backend::{AutomaticStep, CatalogEvent, StoreInstall, UiEvent};
 use bobba::logger::Logger;
 use bobba::scenes::SCENES;
 use bobba::setup::Step;
 use bobba::state::{App, Phase, SendResult, Tab};
+use bobba::store::{CatalogState, Showing};
 use bobba::view::root;
 use bobba_extensions::{Permission, PermissionRequest};
 use bobba_protocol::Direction;
@@ -18,6 +19,7 @@ fn runtime(scene: &str) -> Runtime<App> {
         apply(&mut app);
     }
     let mut rt = Runtime::new(app, root, SIZE, Env::new(true, 2.0));
+    rt.on_key = Some(bobba::on_key);
     rt.frame(0.0);
     settle(&mut rt);
     rt
@@ -448,4 +450,91 @@ fn extensions_tab_lists_extensions_without_their_output() {
     assert!(rt.find("extension-list").is_some());
     assert!(rt.find("extension-divider-0").is_some());
     assert!(rt.find("extension-console").is_none());
+}
+
+#[test]
+fn the_store_opens_on_the_extensions_tab_and_asks_for_the_catalog() {
+    let mut rt = runtime("extensions");
+    assert!(shown(&rt, "install-from-file"));
+    press(&mut rt, "extensions-showing/segment1");
+    assert_eq!(rt.state.store.showing, Showing::Store);
+    assert_eq!(rt.state.store.catalog, CatalogState::Loading);
+    assert!(!shown(&rt, "install-from-file"));
+}
+
+#[test]
+fn a_store_listing_opens_its_details_beside_the_list_and_escape_closes_them() {
+    let mut rt = runtime("store");
+    assert!(shown(&rt, "store-row-Trade Ledger"));
+    assert!(!shown(&rt, "store-detail"));
+
+    press(&mut rt, "store-row-Trade Ledger");
+    assert_eq!(text_of(&rt, "store-detail-title"), "Trade Ledger");
+    assert!(
+        shown(&rt, "store-action-Room Mapper"),
+        "rows keep their actions while the details are open"
+    );
+
+    rt.key(KeyEvent {
+        key: Key::Escape,
+        mods: Mods::default(),
+    });
+    settle(&mut rt);
+    assert_eq!(rt.state.store.detail, None);
+    assert!(!shown(&rt, "store-detail"));
+}
+
+#[test]
+fn a_store_listing_shows_its_download_and_its_failure() {
+    let mut rt = runtime("store");
+    rt.update(|s, _| {
+        s.handle(UiEvent::StoreInstall {
+            title: "Trade Ledger".into(),
+            progress: StoreInstall::Downloading,
+        })
+    });
+    settle(&mut rt);
+    assert!(shows_text(&rt, "Installing"));
+
+    rt.update(|s, _| {
+        s.handle(UiEvent::StoreInstall {
+            title: "Trade Ledger".into(),
+            progress: StoreInstall::Failed("404 Not Found".into()),
+        })
+    });
+    settle(&mut rt);
+    assert!(shows_text(&rt, "404 Not Found"));
+}
+
+#[test]
+fn an_unreachable_store_says_installed_extensions_keep_working() {
+    let mut rt = runtime("store");
+    rt.update(|s, _| {
+        s.handle(UiEvent::Catalog(CatalogEvent::Unreachable(
+            "offline".into(),
+        )))
+    });
+    settle(&mut rt);
+    assert!(shows_text(&rt, "keep working"));
+    press(&mut rt, "store-retry");
+    assert_eq!(rt.state.store.catalog, CatalogState::Loading);
+}
+
+#[test]
+fn an_outdated_store_extension_offers_its_update_in_the_installed_list() {
+    let mut rt = runtime("store");
+    press(&mut rt, "extensions-showing/segment0");
+    assert!(shown(&rt, "installed-update-Wired Helper_1.3.0"));
+}
+
+#[test]
+fn with_no_extensions_yet_the_list_points_to_the_store() {
+    let mut rt = runtime("extensions");
+    rt.update(|s, _| {
+        s.installed.clear();
+        s.extensions.clear();
+    });
+    settle(&mut rt);
+    press(&mut rt, "extensions-empty-browse");
+    assert_eq!(rt.state.store.showing, Showing::Store);
 }

@@ -296,6 +296,7 @@ async fn run(
         runner.start(installed.id(), &ui).await;
     }
     runner.publish(&ui).await;
+    runner.browse();
     let forward_ui = ui.clone();
     tokio::spawn(async move {
         loop {
