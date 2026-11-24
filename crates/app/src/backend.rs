@@ -1,12 +1,18 @@
+use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use bobba_extensions::{ExtensionHost, HostConfig, HostEvent, PermissionRequest, serve};
+use bobba_extensions::{
+    ExtensionHost, ExtensionOutput, HostConfig, HostEvent, Installer, PermissionRequest, Runtime,
+    launch, serve,
+};
 use bobba_protocol::extension_message::HostInfo;
 use bobba_session::{DirectProxy, LogEntry, SessionEvent, SessionHandle, Upstream};
 use bobba_sulek::Sulek;
 use tokio::net::TcpListener;
+use tokio::process::Child;
 use tokio::sync::mpsc;
 
 pub type Host = ExtensionHost<Sulek>;
@@ -49,6 +55,17 @@ impl DirectTarget {
 pub enum Command {
     Connect(DirectTarget),
     Abort,
+    InstallExtension(PathBuf),
+    StartExtension(String),
+    StopExtension(String),
+    UninstallExtension(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstalledState {
+    pub file_name: String,
+    pub runtime: Runtime,
+    pub running: bool,
 }
 
 #[derive(Debug)]
@@ -59,6 +76,9 @@ pub enum UiEvent {
     Log(Vec<LogEntry>),
     Host(HostEvent),
     Permission(PermissionRequest),
+    Installed(Vec<InstalledState>),
+    ExtensionOutput(ExtensionOutput),
+    Notice(String),
     Failed(String),
 }
 
@@ -134,19 +154,46 @@ async fn run(
     mut host_events: mpsc::UnboundedReceiver<HostEvent>,
     mut permissions: mpsc::UnboundedReceiver<PermissionRequest>,
 ) {
-    match bind_extension_port().await {
+    let extension_port = match bind_extension_port().await {
         Some(listener) => {
-            if let Ok(address) = listener.local_addr() {
-                let _ = ui.send(UiEvent::ExtensionPort(address.port())).await;
+            let port = listener.local_addr().ok().map(|address| address.port());
+            if let Some(port) = port {
+                let _ = ui.send(UiEvent::ExtensionPort(port)).await;
             }
             tokio::spawn(serve(listener, host.clone()));
+            port
         }
         None => {
             let _ = ui
                 .send(UiEvent::Failed("no free port for extensions".into()))
                 .await;
+            None
         }
+    };
+    let (output, mut output_rx) = mpsc::unbounded_channel::<ExtensionOutput>();
+    let output_ui = ui.clone();
+    tokio::spawn(async move {
+        while let Some(line) = output_rx.recv().await {
+            if output_ui
+                .send(UiEvent::ExtensionOutput(line))
+                .await
+                .is_err()
+            {
+                return;
+            }
+        }
+    });
+    let mut runner = Runner {
+        installer: Installer::with_default_dir(),
+        port: extension_port,
+        host: host.clone(),
+        output,
+        running: HashMap::new(),
+    };
+    for installed in runner.installer.installed() {
+        runner.start(&installed.file_name, &ui).await;
     }
+    runner.publish(&ui).await;
     let forward_ui = ui.clone();
     tokio::spawn(async move {
         loop {
@@ -170,6 +217,22 @@ async fn run(
                 }
                 pending = Some(tokio::spawn(connect(target, host.clone(), ui.clone())));
             }
+            Command::InstallExtension(path) => match runner.installer.install(&path) {
+                Ok(installed) => runner.start(&installed.file_name, &ui).await,
+                Err(error) => {
+                    let _ = ui.send(UiEvent::Notice(error.to_string())).await;
+                }
+            },
+            Command::StartExtension(file_name) => runner.start(&file_name, &ui).await,
+            Command::StopExtension(file_name) => runner.stop(&file_name).await,
+            Command::UninstallExtension(file_name) => {
+                runner.stop(&file_name).await;
+                if let Err(error) = runner.installer.uninstall(&file_name) {
+                    let _ = ui
+                        .send(UiEvent::Notice(format!("could not uninstall: {error}")))
+                        .await;
+                }
+            }
             Command::Abort => {
                 if let Some(task) = pending.take() {
                     task.abort();
@@ -177,6 +240,69 @@ async fn run(
                 }
             }
         }
+        runner.publish(&ui).await;
+    }
+}
+
+struct Runner {
+    installer: Installer,
+    port: Option<u16>,
+    host: Arc<Host>,
+    output: mpsc::UnboundedSender<ExtensionOutput>,
+    running: HashMap<String, Child>,
+}
+
+impl Runner {
+    async fn start(&mut self, file_name: &str, ui: &smol::channel::Sender<UiEvent>) {
+        if self.is_running(file_name) {
+            return;
+        }
+        let Some(port) = self.port else { return };
+        let Some(installed) = self
+            .installer
+            .installed()
+            .into_iter()
+            .find(|e| e.file_name == file_name)
+        else {
+            return;
+        };
+        match launch(&installed, port, &self.host, self.output.clone()) {
+            Ok(child) => {
+                self.running.insert(installed.file_name, child);
+            }
+            Err(error) => {
+                let _ = ui
+                    .send(UiEvent::Notice(format!(
+                        "could not start {file_name}: {error}"
+                    )))
+                    .await;
+            }
+        }
+    }
+
+    async fn stop(&mut self, file_name: &str) {
+        if let Some(mut child) = self.running.remove(file_name) {
+            let _ = child.kill().await;
+        }
+    }
+
+    fn is_running(&mut self, file_name: &str) -> bool {
+        self.running
+            .get_mut(file_name)
+            .is_some_and(|child| matches!(child.try_wait(), Ok(None)))
+    }
+
+    async fn publish(&mut self, ui: &smol::channel::Sender<UiEvent>) {
+        let installed = self.installer.installed();
+        let states = installed
+            .into_iter()
+            .map(|e| InstalledState {
+                running: self.is_running(&e.file_name),
+                file_name: e.file_name,
+                runtime: e.runtime,
+            })
+            .collect();
+        let _ = ui.send(UiEvent::Installed(states)).await;
     }
 }
 

@@ -16,7 +16,7 @@ use gpui_kit::component::{
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use crate::backend::{Backend, Command, DirectTarget, UiEvent};
+use crate::backend::{Backend, Command, DirectTarget, InstalledState, UiEvent};
 use crate::injection::{INJECTION_NAME, InjectionPanel};
 use crate::logger::{LoggerEvent, LoggerPanel};
 
@@ -76,6 +76,7 @@ pub struct BobbaApp {
     traffic: Traffic,
     extension_port: Option<u16>,
     extensions: Vec<(ExtensionId, ExtensionInfo)>,
+    installed: Vec<InstalledState>,
     console: VecDeque<String>,
     permission_requests: VecDeque<PermissionRequest>,
     hotel_host: Entity<InputState>,
@@ -133,6 +134,7 @@ impl BobbaApp {
             traffic: Traffic::default(),
             extension_port: None,
             extensions: Vec::new(),
+            installed: Vec::new(),
             console: VecDeque::new(),
             permission_requests: VecDeque::new(),
             hotel_host,
@@ -186,6 +188,11 @@ impl BobbaApp {
             UiEvent::Log(entries) => self.record(entries, cx),
             UiEvent::Host(event) => self.handle_host(event, cx),
             UiEvent::Permission(request) => self.permission_requests.push_back(request),
+            UiEvent::Installed(states) => self.installed = states,
+            UiEvent::ExtensionOutput(output) => {
+                self.log_console(format!("[{}] {}", output.file_name, output.line))
+            }
+            UiEvent::Notice(text) => self.log_console(text),
             UiEvent::Failed(reason) => self.status = ConnectionStatus::Failed(reason),
         }
         cx.notify();
@@ -475,6 +482,24 @@ impl BobbaApp {
             )
     }
 
+    fn install_extension(&mut self, cx: &mut Context<Self>) {
+        let picked = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Install extension".into()),
+        });
+        let backend = self.backend.clone();
+        cx.spawn(async move |_, _| {
+            if let Ok(Ok(Some(paths))) = picked.await {
+                for path in paths {
+                    backend.send(Command::InstallExtension(path));
+                }
+            }
+        })
+        .detach();
+    }
+
     fn render_extensions(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let row = |title: String, detail: String, id: ElementId| {
             h_flex()
@@ -482,13 +507,16 @@ impl BobbaApp {
                 .gap_3()
                 .px_3()
                 .py_2()
+                .items_center()
                 .border_b_1()
                 .border_color(cx.theme().border)
-                .child(div().w(px(200.)).text_sm().child(title))
+                .child(div().w(px(220.)).text_sm().truncate().child(title))
                 .child(
                     div()
+                        .flex_1()
                         .text_xs()
                         .text_color(cx.theme().muted_foreground)
+                        .truncate()
                         .child(detail),
                 )
         };
@@ -496,15 +524,90 @@ impl BobbaApp {
             || "Extension port not open".to_owned(),
             |p| format!("Extensions connect on port {p}"),
         );
+        let connected_file = |file: &str| {
+            self.extensions
+                .iter()
+                .find(|(_, info)| info.file.as_deref() == Some(file))
+        };
+        let installed_rows = self.installed.iter().map(|state| {
+            let connected = connected_file(&state.file_name);
+            let title =
+                connected.map_or_else(|| state.file_name.clone(), |(_, info)| info.title.clone());
+            let status = match (connected.is_some(), state.running) {
+                (true, _) => "connected",
+                (false, true) => "starting",
+                (false, false) => "stopped",
+            };
+            let detail = format!("{:?} · {status} · {}", state.runtime, state.file_name);
+            let file = state.file_name.clone();
+            let toggle = if state.running {
+                let file = file.clone();
+                Button::new(SharedString::from(format!("stop-{file}")))
+                    .label("Stop")
+                    .small()
+                    .ghost()
+                    .on_click(cx.listener(move |this, _, _, _| {
+                        this.backend.send(Command::StopExtension(file.clone()))
+                    }))
+            } else {
+                let file = file.clone();
+                Button::new(SharedString::from(format!("start-{file}")))
+                    .label("Start")
+                    .small()
+                    .on_click(cx.listener(move |this, _, _, _| {
+                        this.backend.send(Command::StartExtension(file.clone()))
+                    }))
+            };
+            let uninstall = Button::new(SharedString::from(format!("uninstall-{file}")))
+                .label("Uninstall")
+                .small()
+                .ghost()
+                .on_click(cx.listener(move |this, _, _, _| {
+                    this.backend.send(Command::UninstallExtension(file.clone()))
+                }));
+            row(
+                title,
+                detail,
+                SharedString::from(format!("installed-{}", state.file_name)).into(),
+            )
+            .child(toggle)
+            .child(uninstall)
+        });
+        let manual_rows = self
+            .extensions
+            .iter()
+            .filter(|(_, info)| info.file.is_none())
+            .map(|(id, info)| {
+                let detail = format!(
+                    "{} · {} · v{} · started outside Bobba",
+                    info.author, info.description, info.version
+                );
+                let id = *id;
+                row(info.title.clone(), detail, ElementId::Integer(id)).on_double_click(
+                    cx.listener(move |this, _, _, _| this.backend.host.double_click(id)),
+                )
+            });
         v_flex()
             .size_full()
             .child(
-                div()
+                h_flex()
                     .px_3()
                     .py_2()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(port),
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(port),
+                    )
+                    .child(
+                        Button::new("install-extension")
+                            .label("Install…")
+                            .small()
+                            .primary()
+                            .on_click(cx.listener(|this, _, _, cx| this.install_extension(cx))),
+                    ),
             )
             .child(row(
                 "Logger".into(),
@@ -516,15 +619,8 @@ impl BobbaApp {
                 "built-in".into(),
                 "ext-injection".into(),
             ))
-            .children(self.extensions.iter().map(|(id, info)| {
-                let detail = format!("{} · {} · v{}", info.author, info.description, info.version);
-                let id = *id;
-                row(info.title.clone(), detail, ElementId::Integer(id)).on_double_click(
-                    cx.listener(move |this, _, _, _| {
-                        this.backend.host.double_click(id);
-                    }),
-                )
-            }))
+            .children(installed_rows)
+            .children(manual_rows)
             .child(
                 v_flex()
                     .id("extension-console")

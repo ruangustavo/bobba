@@ -70,3 +70,33 @@ async fn real_gpython_extension_blocks_and_answers_through_bobba() {
 
     extension.kill().await.ok();
 }
+
+#[tokio::test]
+#[ignore = "needs g-python importable by the python3 on PATH"]
+async fn installed_extension_connects_with_its_cookie_and_no_prompt() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/antispam.py");
+    let dir = tempfile::tempdir().expect("temp dir");
+    let installer = bobba_extensions::Installer::new(dir.path());
+    let installed = installer.install(&fixture).expect("installs");
+    let mut w = world(None).await;
+    let (output, _lines) = tokio::sync::mpsc::unbounded_channel();
+    let _child =
+        bobba_extensions::launch(&installed, w.extension_port, &w.host, output).expect("launches");
+    let connected = loop {
+        let event = tokio::time::timeout(TIMEOUT, w.events.recv())
+            .await
+            .expect("event")
+            .expect("open");
+        if let HostEvent::ExtensionConnected { info, .. } = event {
+            break info;
+        }
+    };
+    assert_eq!(
+        connected.file.as_deref(),
+        Some(installed.file_name.as_str())
+    );
+    assert!(
+        w.permissions.try_recv().is_err(),
+        "installed extensions are not prompted"
+    );
+}

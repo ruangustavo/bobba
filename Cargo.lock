@@ -721,6 +721,9 @@ dependencies = [
  "bobba-protocol",
  "bobba-session",
  "bytes",
+ "dirs 6.0.0",
+ "getrandom 0.3.4",
+ "tempfile",
  "thiserror 2.0.21",
  "tokio",
 ]

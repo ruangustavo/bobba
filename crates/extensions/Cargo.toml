@@ -10,3 +10,8 @@ bobba-session.workspace = true
 bytes.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+getrandom.workspace = true
+dirs.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
