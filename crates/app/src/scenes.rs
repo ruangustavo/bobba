@@ -359,3 +359,147 @@ fn permission(s: &mut App) {
             respond,
         });
 }
+
+pub type Break = (&'static str, &'static str, fn(&mut App));
+
+pub const BREAKS: &[Break] = &[
+    ("store", "Worst case", store_worst),
+    ("store", "Worst details", store_worst_details),
+    ("store", "Details: one long word", |s| {
+        store_worst(s);
+        s.store.detail = Some("Benachrichtigungseinstellungen".into());
+    }),
+    ("store", "Details: long title failed", |s| {
+        store_worst(s);
+        s.store.detail = Some("Copiador de Roupas Automático para Quartos Lotados".into());
+    }),
+    ("store", "Details: no authors", |s| {
+        store_worst(s);
+        s.store.detail = Some("🦊 Fox Follower".into());
+    }),
+    ("store", "Empty", store_empty),
+    ("store", "One", store_one),
+    ("store", "1,000 rows", store_huge),
+];
+
+const WORST_CONFIG: &str = r#"{"categories": [{"name": "Fun"}, {"name": "Games"},
+    {"name": "Trading"}, {"name": "Building"}, {"name": "Moderation"}, {"name": "Usability"},
+    {"name": "G-Earth Utilities"}, {"name": "Others"}],
+    "frameworks": [{"name": "G-Node", "installation": {"required": true,
+    "instructions": "https://nodejs.org/en/download"}}]}"#;
+
+const WORST_EXTENSIONS: &str = r#"[
+    {"title": "G-Presets - Building & Wired Presets",
+     "description": "Save any stack of furni and wired as a preset and place it again in any room.\n\n:preset save name - Save the selected area\n:preset load name - Place a preset where you stand\n:preset list - List your presets\n:preset delete name - Delete a preset\n(rotation: 0-7, if empty the saved rotation will be used.)\n:preset rotate x - Rotate the preset before placing it\n:preset mirror - Mirror the preset\n:preset stop - Stop placing\n\nRe-enter the room after installing.\nWorks best with the Wired Helper extension.\nReport bugs on the G-Earth Discord.",
+     "authors": [{"name": "sirjonasxx"}, {"name": "Roboroads"}, {"name": "WiredSpast"}],
+     "version": "1.2.0.0", "categories": ["Building", "Usability", "G-Earth Utilities"],
+     "source": "https://example.test/g-presets/tree/main/src/main/java/extension",
+     "framework": {"name": "Native"}, "rating": 2265,
+     "commands": {"default": ["java", "-jar", "g-presets.jar"]},
+     "compatibility": {"systems": ["Mac", "Windows"], "clients": ["Flash"]}},
+    {"title": "[AIO] Gamba Suite",
+     "description": "Dice, roulette and 13 other casino games with automatic payouts.",
+     "authors": [{"name": "pixelmint"}], "version": "3.0.4", "categories": ["Games"],
+     "framework": {"name": "G-Python"}, "rating": 1284, "updateDate": "02-09-2021 18:08:10",
+     "commands": {"default": ["node", "gamba.js"]},
+     "compatibility": {"systems": ["Mac", "Windows"], "clients": ["Flash"]}},
+    {"title": "Copiador de Roupas Automático para Quartos Lotados",
+     "description": "Copia a roupa de qualquer pessoa no quarto com um clique.",
+     "authors": [{"name": "Đặng Thị Ngọc Hân"}], "version": "0.1.41", "categories": ["Fun"],
+     "framework": {"name": "Native"}, "rating": 1000, "updateDate": "01-11-2025 00:00:00",
+     "commands": {"default": ["java", "-jar", "copiador.jar"]},
+     "compatibility": {"systems": ["Mac", "Windows"], "clients": ["Flash"]}},
+    {"title": "autoclick", "description": "clicks", "authors": [{"name": "dana"}],
+     "version": "1.2.13", "categories": ["Usability"], "framework": {"name": "Native"},
+     "rating": 999, "updateDate": "12-11-2026 10:00:00",
+     "commands": {"default": ["java", "-jar", "autoclick.jar"]},
+     "compatibility": {"systems": ["Mac", "Windows"], "clients": ["Flash"]}},
+    {"title": "🦊 Fox Follower", "authors": [], "version": "1.0",
+     "categories": ["Fun"], "framework": {"name": "Native"},
+     "commands": {"default": ["java", "-jar", "fox.jar"]},
+     "compatibility": {"systems": ["Mac", "Windows"], "clients": ["Flash"]}},
+    {"title": "Benachrichtigungseinstellungen",
+     "description": "Docs: https://example.test/benachrichtigungseinstellungen/wiki/Konfiguration-und-Installation-unter-Windows-und-macOS",
+     "authors": [{"name": "Konstantin Oberhauser-Wettstein"}], "version": "2.3.1",
+     "categories": ["Others"], "framework": {"name": "Native"}, "rating": 12,
+     "commands": {"default": ["java", "-jar", "b.jar"]},
+     "compatibility": {"systems": ["Mac", "Windows"], "clients": ["Flash"]}}
+]"#;
+
+fn load_catalog(s: &mut App, config: &str, extensions: &str, origin: Origin) {
+    if let Ok(catalog) = Catalog::parse(config, extensions, Os::current()) {
+        s.store
+            .handle_catalog(CatalogEvent::Loaded { catalog, origin });
+    }
+}
+
+fn store_worst(s: &mut App) {
+    s.installed = vec![InstalledState {
+        id: "autoclick_1.2.0".into(),
+        kind: InstalledKind::Package {
+            title: "autoclick".into(),
+            version: "1.2.0".into(),
+        },
+        status: ProcessStatus::Running,
+    }];
+    load_catalog(s, WORST_CONFIG, WORST_EXTENSIONS, Origin::Saved);
+    s.store.handle_missing(std::collections::HashSet::from([
+        bobba_store::Runtime::NodeJs,
+        bobba_store::Runtime::Python,
+    ]));
+    s.store.handle_install(
+        "Copiador de Roupas Automático para Quartos Lotados".into(),
+        crate::backend::StoreInstall::Failed(
+            "error sending request for url (https://raw.githubusercontent.com/sirjonasxx/G-ExtensionStore/repo/1.5.3/store/extensions/Copiador%20de%20Roupas/extension.zip)".into(),
+        ),
+    );
+    s.store.handle_install(
+        "🦊 Fox Follower".into(),
+        crate::backend::StoreInstall::Downloading,
+    );
+}
+
+fn store_worst_details(s: &mut App) {
+    store_worst(s);
+    s.store.detail = Some("G-Presets - Building & Wired Presets".into());
+}
+
+fn store_empty(s: &mut App) {
+    load_catalog(s, STORE_CONFIG, "[]", Origin::Fresh);
+}
+
+fn store_one(s: &mut App) {
+    let one = format!(
+        "[{}]",
+        store_listing(
+            "Trade Ledger",
+            "Logs each trade.",
+            "0.9.4",
+            "Trading",
+            "Native",
+            1
+        )
+    );
+    load_catalog(s, STORE_CONFIG, &one, Origin::Fresh);
+}
+
+fn store_huge(s: &mut App) {
+    let listings: Vec<String> = (0..1000u32)
+        .map(|i| {
+            store_listing(
+                &format!("Extension {i}"),
+                "Logs each trade you confirm and values both sides.",
+                "1.0.0",
+                "Trading",
+                "Native",
+                i,
+            )
+        })
+        .collect();
+    load_catalog(
+        s,
+        STORE_CONFIG,
+        &format!("[{}]", listings.join(",")),
+        Origin::Fresh,
+    );
+}

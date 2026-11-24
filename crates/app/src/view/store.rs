@@ -1,7 +1,10 @@
+use std::borrow::Cow;
+
 use bobba_store::{Listing, Origin, Runtime};
 use rune::tok::TextStyle;
 use rune::{
-    Anim, El, Icon, ScrollSpec, Spring, SpringPair, Transition, Tx, col, el, icon, oklch, row, text,
+    Anim, El, GrowthSpec, Icon, ScrollSpec, Spring, SpringPair, Transition, Tx, col, el, icon,
+    oklch, row, text,
 };
 use rune_kit::{Button, ButtonVariant, IconButton, IconButtonVariant, Loader, TextInput};
 
@@ -10,6 +13,7 @@ use crate::store::{CatalogState, ListingStatus};
 use crate::view::theme::paint;
 
 const DETAIL_WIDTH: f32 = 340.0;
+const ROW_HEIGHT: f32 = 61.0;
 const SLIDE: SpringPair = SpringPair::new(Spring::new(0.22, 0.0), Spring::new(0.2, 0.0));
 
 static STAR: Icon = Icon {
@@ -45,11 +49,15 @@ fn hue(title: &str) -> f32 {
 
 pub fn tile(title: &str, size: f32) -> El {
     let hue = hue(title);
-    let initials: String = title
+    let mut initials: String = title
         .split_whitespace()
-        .filter_map(|w| w.chars().next())
+        .filter_map(|w| w.chars().find(|c| c.is_alphanumeric()))
         .take(2)
+        .flat_map(char::to_uppercase)
         .collect();
+    if initials.is_empty() {
+        initials = title.chars().take(1).collect();
+    }
     row()
         .size(size, size)
         .radius(size * 0.26)
@@ -63,18 +71,37 @@ pub fn tile(title: &str, size: f32) -> El {
         )
 }
 
-fn rating(listing: &Listing) -> El {
+fn rating(listing: &Listing) -> Option<El> {
     let p = paint();
     let k = &p.kit;
-    row()
-        .gap(3.0)
-        .center_y()
-        .child(icon(&STAR, 11.0).color(p.amber))
-        .child(
-            text(listing.rating.to_string())
-                .font(k.ty.small)
-                .color(k.c.text_muted),
-        )
+    let rating = listing.rating?;
+    Some(
+        row()
+            .gap(3.0)
+            .center_y()
+            .child(icon(&STAR, 11.0).color(p.amber))
+            .child(
+                text(rating.to_string())
+                    .font(k.ty.small)
+                    .color(k.c.text_muted),
+            ),
+    )
+}
+
+fn summary(description: &str) -> Option<&str> {
+    description
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+}
+
+fn search_placeholder(count: usize) -> String {
+    let noun = if count == 1 {
+        "extension"
+    } else {
+        "extensions"
+    };
+    format!("Search {count} {noun}")
 }
 
 fn install(title: &str) -> impl Fn(&mut App) + Clone + 'static {
@@ -176,7 +203,7 @@ fn notice(listing: &Listing, status: &ListingStatus) -> Option<El> {
                 text(message)
                     .font(k.ty.small)
                     .color(k.c.text_muted)
-                    .wrap()
+                    .wrap_anywhere()
                     .grow(1.0)
                     .shrink(),
             ),
@@ -188,13 +215,24 @@ fn listing_row(s: &App, listing: &Listing, selected: bool) -> El {
     let k = &p.kit;
     let status = s.store.status(listing, &s.installed);
     let subtitle = match &status {
-        ListingStatus::Failed(reason) => text(format!("Could not install: {reason}")).color(p.red),
+        ListingStatus::Failed(reason) => {
+            let message = format!("Could not install: {reason}");
+            Some(
+                text(message.clone())
+                    .color(p.red)
+                    .help_when_truncated(message),
+            )
+        }
         ListingStatus::NeedsRuntime { first, rest } => {
             let (names, plural) = missing(*first, rest);
             let are = if plural { "are" } else { "is" };
-            text(format!("Needs {names}, which {are} not installed")).color(p.amber)
+            Some(text(format!("Needs {names}, which {are} not installed")).color(p.amber))
         }
-        _ => text(listing.description.clone()).color(k.c.text_muted),
+        _ => summary(&listing.description).map(|line| {
+            text(line.to_owned())
+                .color(k.c.text_muted)
+                .help_when_truncated(line.to_owned())
+        }),
     };
     let title = listing.title.clone();
     let action = match status {
@@ -231,14 +269,26 @@ fn listing_row(s: &App, listing: &Listing, selected: bool) -> El {
                             text(listing.title.clone())
                                 .font(k.ty.ui_medium)
                                 .color(k.c.text_base)
-                                .truncate(),
+                                .truncate()
+                                .help_when_truncated(listing.title.clone()),
                         )
-                        .child(rating(listing)),
+                        .children(rating(listing)),
                 )
-                .child(subtitle.font(k.ty.small).truncate()),
+                .children(subtitle.map(|line| line.font(k.ty.small).truncate())),
         )
         .child(action)
         .on_press(move |s: &mut App| s.toggle_store_detail(&title))
+}
+
+fn visible_row(s: &App, i: usize) -> El {
+    let visible = s.store.visible();
+    let open = s.store.open_detail(&visible);
+    let Some(listing) = visible.get(i) else {
+        return el();
+    };
+    let line = if i == 0 { 0.0 } else { 1.0 };
+    listing_row(s, listing, open.as_deref() == Some(&listing.title))
+        .border_sides([line, 0.0, 0.0, 0.0], paint().hairline)
 }
 
 fn fact(label: &str, value: String) -> El {
@@ -252,10 +302,11 @@ fn fact(label: &str, value: String) -> El {
                 .color(k.c.text_faint),
         )
         .child(
-            text(value)
+            text(value.clone())
                 .font(k.ty.small_medium)
                 .color(k.c.text_base)
-                .truncate(),
+                .truncate()
+                .help_when_truncated(value),
         )
 }
 
@@ -263,31 +314,6 @@ fn detail(s: &App, listing: &Listing) -> El {
     let p = paint();
     let k = &p.kit;
     let status = s.store.status(listing, &s.installed);
-    let head = row()
-        .w_full()
-        .gap(14.0)
-        .center_y()
-        .child(tile(&listing.title, 44.0))
-        .child(
-            col()
-                .gap(4.0)
-                .grow(1.0)
-                .shrink()
-                .child(
-                    text(listing.title.clone())
-                        .key("store-detail-title")
-                        .font(TextStyle::new(16.0, 650.0))
-                        .color(k.c.text_base)
-                        .truncate(),
-                )
-                .child(
-                    text(format!("by {}", listing.authors.join(", ")))
-                        .font(k.ty.small)
-                        .color(k.c.text_muted)
-                        .truncate(),
-                ),
-        )
-        .child(action(listing, &status).key("store-detail-action"));
     let facts = row()
         .w_full()
         .gap(12.0)
@@ -295,15 +321,13 @@ fn detail(s: &App, listing: &Listing) -> El {
         .child(fact("Version", listing.version.clone()))
         .child(fact("Framework", listing.framework.clone()))
         .child(fact("Category", listing.categories.join(", ")))
-        .child(fact(
-            "Updated",
+        .children(
             listing
                 .updated
                 .split_whitespace()
                 .next()
-                .unwrap_or_default()
-                .to_owned(),
-        ));
+                .map(|day| fact("Updated", day.to_owned())),
+        );
     let source = listing.source.clone();
     let source_link = (!source.is_empty()).then(|| {
         Button::new("View source")
@@ -326,14 +350,13 @@ fn detail(s: &App, listing: &Listing) -> El {
             stick_bottom: false,
         })
         .transition(Transition::none())
-        .child(head)
         .children(notice(listing, &status))
-        .child(
+        .children((!listing.description.trim().is_empty()).then(|| {
             text(listing.description.clone())
                 .font(k.ty.body)
                 .color(k.c.text_base)
-                .wrap(),
-        )
+                .wrap_anywhere()
+        }))
         .child(el().w_full().h(1.0).fill(p.hairline))
         .child(facts)
         .child(
@@ -341,20 +364,65 @@ fn detail(s: &App, listing: &Listing) -> El {
                 .w_full()
                 .gap(6.0)
                 .center_y()
-                .child(rating(listing))
+                .children(rating(listing).map(|stars| {
+                    row().gap(6.0).center_y().child(stars).child(
+                        text("on the G-Earth Discord")
+                            .font(k.ty.small)
+                            .color(k.c.text_faint),
+                    )
+                }))
+                .child(el().grow(1.0))
+                .children(source_link),
+        )
+}
+
+fn head(s: &App, listing: &Listing) -> El {
+    let k = &paint().kit;
+    let status = s.store.status(listing, &s.installed);
+    row()
+        .w_full()
+        .pt(14.0)
+        .pb(16.0)
+        .pl(20.0)
+        .pr(10.0)
+        .gap(10.0)
+        .items_start()
+        .child(
+            col()
+                .gap(2.0)
+                .grow(1.0)
+                .shrink()
                 .child(
-                    text("on the G-Earth Discord")
+                    text(listing.title.clone())
+                        .key("store-detail-title")
+                        .font(TextStyle::new(15.0, 650.0))
+                        .color(k.c.text_base)
+                        .wrap_anywhere()
+                        .max_lines(2)
+                        .help_when_truncated(listing.title.clone()),
+                )
+                .children((!listing.authors.is_empty()).then(|| {
+                    text(format!("by {}", listing.authors.join(", ")))
                         .font(k.ty.small)
                         .color(k.c.text_faint)
-                        .grow(1.0),
-                )
-                .children(source_link),
+                        .truncate()
+                        .help_when_truncated(listing.authors.join(", "))
+                })),
+        )
+        .child(action(listing, &status).key("store-detail-action"))
+        .child(
+            IconButton::new(k.glyph.close)
+                .variant(IconButtonVariant::Ghost)
+                .label("Close details")
+                .help("Close details (Esc)")
+                .on_press(|s: &mut App| s.store.detail = None)
+                .build(k)
+                .key("store-detail-close"),
         )
 }
 
 fn panel(s: &App, listing: &Listing) -> El {
     let p = paint();
-    let k = &p.kit;
     col()
         .key("store-detail")
         .w(DETAIL_WIDTH)
@@ -368,17 +436,7 @@ fn panel(s: &App, listing: &Listing) -> El {
                 .springs(SLIDE)
                 .hold_layout(),
         )
-        .child(
-            row().w_full().pt(8.0).pr(8.0).justify_end().child(
-                IconButton::new(k.glyph.close)
-                    .variant(IconButtonVariant::Ghost)
-                    .label("Close details")
-                    .help("Close details (Esc)")
-                    .on_press(|s: &mut App| s.store.detail = None)
-                    .build(k)
-                    .key("store-detail-close"),
-            ),
-        )
+        .child(head(s, listing))
         .child(detail(s, listing))
 }
 
@@ -428,7 +486,7 @@ fn toolbar(s: &App) -> El {
         .child(
             TextInput::new(&s.store.query)
                 .label("Search extensions")
-                .placeholder(format!("Search {count} extensions"))
+                .placeholder(search_placeholder(count))
                 .leading_icon(k.glyph.search)
                 .clear_button()
                 .width(Some(220.0))
@@ -491,28 +549,35 @@ fn listings(s: &App) -> El {
     if visible.is_empty() {
         let query = s.store.query.text.trim();
         let body = if query.is_empty() {
-            "Nothing in this category runs on this computer yet.".to_owned()
+            match s.store.category {
+                Some(_) => "Nothing in this category runs on this computer yet.".to_owned(),
+                None => "No extension in the store runs on this computer yet.".to_owned(),
+            }
         } else {
             format!("Nothing matches “{query}”. Try another word or pick All.")
         };
         return frame().child(message("store-empty", None, "No extensions found", body));
     }
     let open = s.store.open_detail(&visible);
-    let rows = visible
-        .iter()
-        .enumerate()
-        .fold(col().w_full(), |c, (i, listing)| {
-            let c = if i == 0 {
-                c
-            } else {
-                c.child(el().w_full().h(1.0).fill(paint().hairline))
-            };
-            c.child(listing_row(
-                s,
-                listing,
-                open.as_deref() == Some(&listing.title),
-            ))
-        });
+    let rows = col()
+        .key("store-rows")
+        .w_full()
+        .growth(GrowthSpec::default())
+        .virtual_rows(
+            visible.len(),
+            ROW_HEIGHT,
+            |s: &App, i| {
+                Cow::Owned(
+                    s.store
+                        .visible()
+                        .get(i)
+                        .map_or_else(String::new, |listing| {
+                            format!("store-row-{}", listing.title)
+                        }),
+                )
+            },
+            visible_row,
+        );
     let detail = open
         .and_then(|title| visible.into_iter().find(|l| l.title == title))
         .map(|listing| panel(s, listing));
@@ -588,4 +653,15 @@ pub fn view(s: &App) -> El {
         }
     };
     col().key("store").w_full().grow(1.0).min_h(0.0).child(body)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_search_placeholder_counts_one_extension() {
+        assert_eq!(search_placeholder(1), "Search 1 extension");
+        assert_eq!(search_placeholder(61), "Search 61 extensions");
+    }
 }

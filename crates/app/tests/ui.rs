@@ -4,7 +4,7 @@ use bobba::backend::{
     AutomaticStep, CatalogEvent, InstalledKind, InstalledState, StoreInstall, UiEvent,
 };
 use bobba::logger::Logger;
-use bobba::scenes::SCENES;
+use bobba::scenes::{BREAKS, SCENES};
 use bobba::setup::Step;
 use bobba::state::{App, Phase, SendResult, Tab};
 use bobba::store::{CatalogState, Showing};
@@ -708,4 +708,207 @@ fn importing_from_gearth_says_it_is_working_then_how_many_came() {
             .iter()
             .any(|line| line.contains("Imported 4"))
     );
+}
+
+const MIN_SIZE: (f32, f32) = (680.0, 480.0);
+
+fn store_break(case: &str) -> Runtime<App> {
+    store_break_at(case, SIZE)
+}
+
+fn store_break_at(case: &str, size: (f32, f32)) -> Runtime<App> {
+    let mut app = App::new();
+    if let Some((_, scene)) = SCENES.iter().find(|(name, _)| *name == "store") {
+        scene(&mut app);
+    }
+    let Some((_, _, apply)) = BREAKS.iter().find(|(_, name, _)| *name == case) else {
+        panic!("{case} is a store break");
+    };
+    apply(&mut app);
+    let mut rt = Runtime::new(app, root, size, Env::new(true, 2.0));
+    rt.on_key = Some(bobba::on_key);
+    rt.frame(0.0);
+    settle(&mut rt);
+    rt
+}
+
+fn texts_in<S: 'static>(rt: &Runtime<S>, key: &str) -> Vec<String> {
+    rt.elements()
+        .into_iter()
+        .filter(|e| !e.exiting && e.path.contains(key))
+        .filter_map(|e| e.text)
+        .collect()
+}
+
+fn helps<S: 'static>(rt: &Runtime<S>, wanted: &str) -> bool {
+    rt.elements()
+        .iter()
+        .any(|e| !e.exiting && e.help.as_deref().is_some_and(|h| h.contains(wanted)))
+}
+
+#[test]
+fn a_multi_line_description_keeps_its_store_row_to_one_line() {
+    for case in ["Worst case", "Worst details"] {
+        let rt = store_break(case);
+        let height = height_of(&rt, "store-row-G-Presets - Building & Wired Presets");
+        assert!(height < 80.0, "{case}: the row is {height} tall");
+        assert!(shows_text(
+            &rt,
+            "Save any stack of furni and wired as a preset and place it again in any room."
+        ));
+    }
+}
+
+#[test]
+fn store_tiles_take_initials_from_the_letters_of_the_title() {
+    let rt = store_break("Worst case");
+    for (row, initials) in [
+        ("store-row-G-Presets - Building & Wired Presets", "GB"),
+        ("store-row-[AIO] Gamba Suite", "AG"),
+        ("store-row-autoclick", "A"),
+        ("store-row-🦊 Fox Follower", "FF"),
+    ] {
+        let texts = texts_in(&rt, row);
+        assert!(texts.iter().any(|t| t == initials), "{row}: {texts:?}");
+    }
+}
+
+#[test]
+fn a_store_row_cut_short_shows_the_rest_on_hover() {
+    let rt = store_break_at("Worst details", MIN_SIZE);
+    assert!(helps(&rt, "extension.zip"), "the failure reason");
+    assert!(
+        helps(&rt, "Konfiguration-und-Installation"),
+        "the description"
+    );
+}
+
+#[test]
+fn store_details_leave_out_what_the_listing_does_not_say() {
+    let rt = store_break("Worst details");
+    assert!(!shows_text(&rt, "Updated"));
+    let fox = texts_in(&rt, "store-row-🦊 Fox Follower");
+    assert!(
+        !fox.iter().any(|t| t == "0" || t.is_empty()),
+        "an unrated listing without a description: {fox:?}"
+    );
+}
+
+#[test]
+fn store_details_show_the_whole_title_and_category() {
+    let rt = store_break("Worst details");
+    assert!(
+        height_of(&rt, "store-detail-title") > 24.0,
+        "the title wraps"
+    );
+    assert!(helps(&rt, "Building, Usability, G-Earth Utilities"));
+}
+
+#[test]
+fn a_thousand_store_listings_build_only_the_rows_on_screen() {
+    let rt = store_break("1,000 rows");
+    assert!(shown(&rt, "store-row-Extension 999"));
+    assert!(!shown(&rt, "store-row-Extension 0"));
+}
+
+#[test]
+fn an_empty_store_does_not_blame_a_category() {
+    let rt = store_break("Empty");
+    assert!(shows_text(
+        &rt,
+        "No extension in the store runs on this computer yet."
+    ));
+    assert!(!shows_text(&rt, "this category"));
+}
+
+fn rect_of<S: 'static>(rt: &Runtime<S>, key: &str) -> [f32; 4] {
+    rt.elements()
+        .into_iter()
+        .find(|e| e.key.as_deref() == Some(key) && !e.exiting)
+        .map(|e| e.rect)
+        .unwrap_or_else(|| panic!("{key} is on screen"))
+}
+
+#[test]
+fn store_details_keep_the_title_and_actions_on_one_line_above_the_description() {
+    let mut rt = runtime("store");
+    press(&mut rt, "store-row-Trade Ledger");
+    let title = rect_of(&rt, "store-detail-title");
+    let close = rect_of(&rt, "store-detail-close");
+    let action = rect_of(&rt, "store-detail-action");
+    for (name, rect) in [("close", close), ("action", action)] {
+        assert!(
+            rect[1] < title[1] + title[3] && title[1] < rect[1] + rect[3],
+            "{name} sits beside the title: {rect:?} vs {title:?}"
+        );
+    }
+    let panel = rect_of(&rt, "store-detail");
+    let description = rt
+        .elements()
+        .into_iter()
+        .find(|e| {
+            !e.exiting
+                && e.text.as_deref()
+                    == Some("Logs each trade you confirm, values both sides with recent marketplace averages, and warns before you accept a lopsided offer.")
+                && e.path.contains("store-detail")
+        })
+        .map(|e| e.rect)
+        .unwrap_or_else(|| panic!("the description is in the details"));
+    let head = description[1] - panel[1];
+    assert!(head < 80.0, "the description starts {head} below the top");
+    assert!(
+        !texts_in(&rt, "store-detail").iter().any(|t| t == "TL"),
+        "the details leave the tile to the selected row"
+    );
+}
+
+#[test]
+fn store_details_without_authors_or_description_leave_no_gaps() {
+    let rt = store_break("Details: no authors");
+    let texts = texts_in(&rt, "store-detail");
+    assert!(
+        !texts.iter().any(|t| t.trim() == "by"),
+        "no byline without authors: {texts:?}"
+    );
+    assert!(
+        !texts.iter().any(|t| t.is_empty()),
+        "no empty description: {texts:?}"
+    );
+}
+
+#[test]
+fn a_store_title_of_one_long_word_uses_both_lines() {
+    let rt = store_break("Details: one long word");
+    let height = height_of(&rt, "store-detail-title");
+    assert!(height > 24.0, "the title is {height} tall");
+}
+
+fn lines_of_text<S: 'static>(rt: &Runtime<S>, starts: &str) -> f32 {
+    rt.elements()
+        .into_iter()
+        .find(|e| {
+            !e.exiting
+                && e.path.contains("store-detail")
+                && e.text.as_deref().is_some_and(|t| t.starts_with(starts))
+        })
+        .and_then(|e| e.text_style.map(|style| e.rect[3] / style.line_height))
+        .unwrap_or_else(|| panic!("a text starting with {starts:?} is on screen"))
+}
+
+#[test]
+fn store_details_wrap_links_inside_the_panel() {
+    for (case, starts) in [
+        ("Details: one long word", "Docs: https://"),
+        (
+            "Details: long title failed",
+            "Could not install: error sending",
+        ),
+    ] {
+        let rt = store_break(case);
+        let lines = lines_of_text(&rt, starts);
+        assert!(
+            lines >= 4.0,
+            "{case}: {starts:?} takes {lines} lines, so its link runs past the panel"
+        );
+    }
 }
