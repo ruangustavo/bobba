@@ -1,0 +1,12 @@
+[package]
+name = "bobba-bench"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+bobba-protocol.workspace = true
+bobba-session.workspace = true
+bobba-extensions.workspace = true
+tokio.workspace = true

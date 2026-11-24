@@ -716,6 +716,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "bobba-bench"
+version = "0.1.0"
+dependencies = [
+ "bobba-extensions",
+ "bobba-protocol",
+ "bobba-session",
+ "tokio",
+]
+
+[[package]]
 name = "bobba-extensions"
 version = "0.1.0"
 dependencies = [
