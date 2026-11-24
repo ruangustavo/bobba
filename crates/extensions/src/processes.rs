@@ -3,6 +3,8 @@ use std::collections::HashMap;
 use tokio::process::Child;
 use tokio::sync::{mpsc, oneshot};
 
+use crate::process_tree::ProcessTree;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProcessStatus {
     Running,
@@ -47,6 +49,7 @@ impl Processes {
         let (stop, stopped) = oneshot::channel::<oneshot::Sender<()>>();
         let exits = self.exits.clone();
         let watched = id.to_owned();
+        let tree = ProcessTree::adopt(&child).ok();
         tokio::spawn(async move {
             tokio::select! {
                 status = child.wait() => {
@@ -54,6 +57,9 @@ impl Processes {
                     let _ = exits.send(Exit { id: watched, launch, code });
                 }
                 done = stopped => {
+                    if let Some(tree) = tree {
+                        tree.end();
+                    }
                     let _ = child.kill().await;
                     if let Ok(done) = done {
                         let _ = done.send(());

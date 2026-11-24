@@ -14,6 +14,11 @@ const COOKIE_LENGTH: usize = 40;
 const SUFFIX_LENGTH: usize = 12;
 const COMMAND_FILE: &str = "command.txt";
 const FILES_DIR: &str = "extension";
+#[cfg(windows)]
+const EXECUTABLE_TYPE: &str = "exe";
+#[cfg(not(windows))]
+const EXECUTABLE_TYPE: &str = "sh";
+pub const FILE_TYPES: [&str; 5] = ["jar", "py", "py3", "js", EXECUTABLE_TYPE];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Runtime {
@@ -30,7 +35,7 @@ impl Runtime {
             "jar" => Some(Runtime::Java),
             "py" | "py3" => Some(Runtime::Python),
             "js" => Some(Runtime::Node),
-            "sh" | "exe" => Some(Runtime::Executable),
+            other if other == EXECUTABLE_TYPE => Some(Runtime::Executable),
             _ => None,
         }
     }
@@ -351,6 +356,7 @@ pub fn launch<L: PacketInfoLoader>(
             std::env::var_os("JDK_JAVA_OPTIONS"),
         ));
     }
+    hide_console(command.as_std_mut());
     let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -366,15 +372,18 @@ pub fn launch<L: PacketInfoLoader>(
     Ok(child)
 }
 
+const PYTHON_NAMES: [&str; 2] = ["python", "python3"];
 #[cfg(target_os = "windows")]
-const PYTHON_ALTERNATIVES: &[&str] = &["py", "python3"];
+const PYTHON_ALTERNATIVES: &[&str] = &["py", "python3", "python"];
 #[cfg(not(target_os = "windows"))]
-const PYTHON_ALTERNATIVES: &[&str] = &["python3"];
+const PYTHON_ALTERNATIVES: &[&str] = &["python3", "python"];
 
 fn resolve_with(program: &str, available: impl Fn(&str) -> bool) -> String {
-    if program == "python"
+    if PYTHON_NAMES.contains(&program)
         && !available(program)
-        && let Some(alternative) = PYTHON_ALTERNATIVES.iter().find(|name| available(name))
+        && let Some(alternative) = PYTHON_ALTERNATIVES
+            .iter()
+            .find(|name| **name != program && available(name))
     {
         return (*alternative).to_owned();
     }
@@ -549,10 +558,20 @@ mod tests {
         assert_eq!(Runtime::for_path(Path::new("a.py3")), Some(Runtime::Python));
         assert_eq!(Runtime::for_path(Path::new("a.js")), Some(Runtime::Node));
         assert_eq!(
-            Runtime::for_path(Path::new("a.sh")),
+            Runtime::for_path(Path::new(&format!("a.{EXECUTABLE_TYPE}"))),
             Some(Runtime::Executable)
         );
         assert_eq!(Runtime::for_path(Path::new("a.txt")), None);
+    }
+
+    #[test]
+    fn only_this_system_s_executables_install() {
+        let foreign = if EXECUTABLE_TYPE == "sh" {
+            "a.exe"
+        } else {
+            "a.sh"
+        };
+        assert_eq!(Runtime::for_path(Path::new(foreign)), None);
     }
 
     #[test]
@@ -690,6 +709,17 @@ mod tests {
         assert_eq!(resolve_with("python", both), "python");
         assert_eq!(resolve_with("python", |_| false), "python");
         assert_eq!(resolve_with("java", only_fallback), "java");
+    }
+
+    #[test]
+    fn python3_falls_back_to_another_python_when_missing() {
+        let other = PYTHON_ALTERNATIVES
+            .iter()
+            .find(|name| **name != "python3")
+            .copied()
+            .unwrap_or("python3");
+        assert_eq!(resolve_with("python3", |name| name == other), other);
+        assert_eq!(resolve_with("python3", |_| true), "python3");
     }
 
     #[test]

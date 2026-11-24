@@ -183,7 +183,7 @@ fn install(_: &mut App, tx: &mut Tx) {
         title: "Install extension".into(),
         ..Default::default()
     }
-    .filter("Extensions", &["jar", "py", "py3", "js", "sh", "exe"]);
+    .filter("Extensions", &bobba_extensions::FILE_TYPES);
     tx.open_file(options, |s: &mut App, result, _| match result {
         Ok(Some(path)) => s.send(Command::InstallExtension(path)),
         Ok(None) => {}
