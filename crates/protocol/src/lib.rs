@@ -2,6 +2,7 @@ pub mod direction;
 pub mod expression;
 pub mod extension_message;
 pub mod framer;
+pub mod key_recovery;
 pub mod latin1;
 pub mod message;
 pub mod packet;

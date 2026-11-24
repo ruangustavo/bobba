@@ -733,6 +733,7 @@ name = "bobba-protocol"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "rayon",
  "serde",
  "serde_json",
  "thiserror 2.0.21",

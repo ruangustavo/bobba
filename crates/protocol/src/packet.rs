@@ -63,6 +63,21 @@ impl Packet {
         PacketReader::new(self.body())
     }
 
+    pub fn has_structure(&self, structure: &str) -> bool {
+        let mut reader = self.reader();
+        let fits = structure.chars().all(|code| match code {
+            'i' => reader.read_i32().is_ok(),
+            's' => reader.read_string_bytes().is_ok(),
+            'b' | 'B' => reader.read_u8().is_ok(),
+            'u' => reader.read_u16().is_ok(),
+            'l' => reader.read_i64().is_ok(),
+            'd' => reader.read_f64().is_ok(),
+            'f' => reader.read_f32().is_ok(),
+            _ => false,
+        });
+        fits && reader.is_at_end()
+    }
+
     pub fn with_header(&self, header_id: u16) -> Self {
         Self::new(header_id, self.body())
     }
@@ -300,6 +315,14 @@ mod tests {
                 available: 2
             })
         );
+    }
+
+    #[test]
+    fn checks_flat_structures_exactly() {
+        let p = Packet::builder(2377).string("B").bool(true).build();
+        assert!(p.has_structure("sB"));
+        assert!(!p.has_structure("s"));
+        assert!(!p.has_structure("sBi"));
     }
 
     #[test]
