@@ -10,6 +10,7 @@ bobba-intercept.workspace = true
 bobba-protocol.workspace = true
 bobba-session.workspace = true
 bobba-sulek.workspace = true
+bobba-store.workspace = true
 rune.workspace = true
 rune-kit.workspace = true
 tokio.workspace = true

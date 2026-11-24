@@ -174,6 +174,16 @@ impl Installer {
         found
     }
 
+    pub fn versions_of(&self, title: &str) -> Vec<Package> {
+        self.installed()
+            .into_iter()
+            .filter_map(|e| match e {
+                InstalledExtension::Package(package) if package.title == title => Some(package),
+                _ => None,
+            })
+            .collect()
+    }
+
     pub fn install_package(
         &self,
         title: &str,
@@ -208,6 +218,11 @@ impl Installer {
         if let Err(error) = written {
             let _ = std::fs::remove_dir_all(&dir);
             return Err(error);
+        }
+        for older in self.versions_of(title) {
+            if older.folder != folder {
+                std::fs::remove_dir_all(&older.dir)?;
+            }
         }
         Ok(InstalledExtension::Package(Package {
             folder,
@@ -497,6 +512,25 @@ mod tests {
         installer.uninstall(installed.id()).expect("uninstalls");
         assert!(installer.installed().is_empty());
         assert!(!install_dir.path().join("Room Mapper_2.0.1").exists());
+    }
+
+    #[test]
+    fn a_new_version_replaces_the_old_one_only_once_it_is_in_place() {
+        let install_dir = tempfile::tempdir().expect("temp dir");
+        let installer = Installer::new(install_dir.path());
+        let zip = archive(&[("tool.jar", b"jar", 0o644)]);
+        installer
+            .install_package("Room Mapper", "1.0", &command(), &zip)
+            .expect("installs");
+
+        let broken = installer.install_package("Room Mapper", "2.0", &command(), b"not a zip");
+        assert!(broken.is_err());
+        assert_eq!(installer.installed()[0].id(), "Room Mapper_1.0");
+
+        let updated = installer
+            .install_package("Room Mapper", "2.0", &command(), &zip)
+            .expect("updates");
+        assert_eq!(installer.installed(), vec![updated]);
     }
 
     #[test]

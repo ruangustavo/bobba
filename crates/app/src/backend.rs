@@ -14,6 +14,7 @@ use bobba_protocol::extension_message::HostInfo;
 use bobba_session::{
     DirectProxy, DumpFile, LogEntry, NoTables, SessionEvent, SessionHandle, TableSource, Upstream,
 };
+use bobba_store::{Catalog, Listing, Origin, Store, StoreError};
 use bobba_sulek::Sulek;
 use tokio::net::TcpListener;
 use tokio::process::Child;
@@ -67,6 +68,8 @@ pub enum Command {
     PrepareClient(PathBuf),
     Abort,
     InstallExtension(PathBuf),
+    BrowseStore,
+    InstallFromStore(String),
     StartExtension(String),
     StopExtension(String),
     UninstallExtension(String),
@@ -120,6 +123,32 @@ pub enum UiEvent {
     Notice(String),
     Automatic(AutomaticStep),
     Failed(String),
+    Catalog(CatalogEvent),
+    StoreInstall {
+        title: String,
+        progress: StoreInstall,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CatalogEvent {
+    Loaded { catalog: Catalog, origin: Origin },
+    Unreachable(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StoreInstall {
+    Downloading,
+    Installed,
+    Failed(String),
+}
+
+enum StoreResult {
+    Loaded(Result<(Catalog, Origin), StoreError>),
+    Downloaded {
+        listing: Listing,
+        archive: Result<Vec<u8>, StoreError>,
+    },
 }
 
 #[derive(Clone)]
@@ -252,12 +281,16 @@ async fn run(
             }
         }
     });
+    let (store_results, mut store_rx) = mpsc::unbounded_channel::<StoreResult>();
     let mut runner = Runner {
         installer: Installer::with_default_dir(),
         port: extension_port,
         host: host.clone(),
         output,
         running: HashMap::new(),
+        store: Arc::new(Store::with_default_cache()),
+        catalog: None,
+        store_results,
     };
     for installed in runner.installer.installed() {
         runner.start(installed.id(), &ui).await;
@@ -278,7 +311,16 @@ async fn run(
     });
 
     let mut pending: Option<tokio::task::JoinHandle<()>> = None;
-    while let Some(command) = commands.recv().await {
+    loop {
+        let command = tokio::select! {
+            Some(command) = commands.recv() => command,
+            Some(result) = store_rx.recv() => {
+                runner.finish(result, &ui).await;
+                runner.publish(&ui).await;
+                continue;
+            }
+            else => return,
+        };
         match command {
             Command::Connect(target) => {
                 if let Some(task) = pending.take() {
@@ -304,6 +346,8 @@ async fn run(
                     ui.emit(UiEvent::Notice(error.to_string()));
                 }
             },
+            Command::BrowseStore => runner.browse(),
+            Command::InstallFromStore(title) => runner.download(&title, &ui),
             Command::StartExtension(file_name) => runner.start(&file_name, &ui).await,
             Command::StopExtension(file_name) => runner.stop(&file_name).await,
             Command::UninstallExtension(file_name) => {
@@ -329,9 +373,98 @@ struct Runner {
     host: Arc<Host>,
     output: mpsc::UnboundedSender<ExtensionOutput>,
     running: HashMap<String, Child>,
+    store: Arc<Store>,
+    catalog: Option<Catalog>,
+    store_results: mpsc::UnboundedSender<StoreResult>,
 }
 
 impl Runner {
+    fn browse(&self) {
+        let store = self.store.clone();
+        let results = self.store_results.clone();
+        tokio::spawn(async move {
+            let _ = results.send(StoreResult::Loaded(store.load().await));
+        });
+    }
+
+    fn download(&self, title: &str, ui: &UiSink) {
+        let Some(listing) = self
+            .catalog
+            .as_ref()
+            .and_then(|catalog| catalog.listing(title))
+            .cloned()
+        else {
+            ui.emit(UiEvent::StoreInstall {
+                title: title.to_owned(),
+                progress: StoreInstall::Failed("it is not in the store anymore".into()),
+            });
+            return;
+        };
+        ui.emit(UiEvent::StoreInstall {
+            title: title.to_owned(),
+            progress: StoreInstall::Downloading,
+        });
+        let store = self.store.clone();
+        let results = self.store_results.clone();
+        tokio::spawn(async move {
+            let archive = store.download(&listing.title).await;
+            let _ = results.send(StoreResult::Downloaded { listing, archive });
+        });
+    }
+
+    async fn finish(&mut self, result: StoreResult, ui: &UiSink) {
+        match result {
+            StoreResult::Loaded(Ok((catalog, origin))) => {
+                self.catalog = Some(catalog.clone());
+                ui.emit(UiEvent::Catalog(CatalogEvent::Loaded { catalog, origin }));
+            }
+            StoreResult::Loaded(Err(error)) => {
+                ui.emit(UiEvent::Catalog(CatalogEvent::Unreachable(
+                    error.to_string(),
+                )));
+            }
+            StoreResult::Downloaded { listing, archive } => {
+                let title = listing.title.clone();
+                let progress = match self.install_listing(&listing, archive, ui).await {
+                    Ok(id) => {
+                        self.start(&id, ui).await;
+                        StoreInstall::Installed
+                    }
+                    Err(reason) => StoreInstall::Failed(reason),
+                };
+                ui.emit(UiEvent::StoreInstall { title, progress });
+            }
+        }
+    }
+
+    async fn install_listing(
+        &mut self,
+        listing: &Listing,
+        archive: Result<Vec<u8>, StoreError>,
+        ui: &UiSink,
+    ) -> Result<String, String> {
+        let archive = archive.map_err(|error| error.to_string())?;
+        let older = self.installer.versions_of(&listing.title);
+        for package in &older {
+            self.stop(&package.folder).await;
+        }
+        let installed = self.installer.install_package(
+            &listing.title,
+            &listing.version,
+            &listing.command,
+            &archive,
+        );
+        match installed {
+            Ok(installed) => Ok(installed.id().to_owned()),
+            Err(error) => {
+                for package in &older {
+                    self.start(&package.folder, ui).await;
+                }
+                Err(error.to_string())
+            }
+        }
+    }
+
     async fn start(&mut self, id: &str, ui: &UiSink) {
         if self.is_running(id) {
             return;

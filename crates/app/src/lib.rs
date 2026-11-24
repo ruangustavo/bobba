@@ -7,6 +7,7 @@ pub mod repeat;
 pub mod scenes;
 pub mod setup;
 pub mod state;
+pub mod store;
 pub mod view;
 
 use rune::Tx;

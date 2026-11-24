@@ -16,6 +16,7 @@ use crate::log_feed::LogFeed;
 use crate::recent::{self, Recent};
 use crate::repeat::{Interval, Repeats};
 use crate::setup::{Progress, Step};
+use crate::store::StoreState;
 
 const CONSOLE_LIMIT: usize = 500;
 pub const DEFAULT_HOTEL: &str = "game-br.habbo.com";
@@ -162,6 +163,7 @@ pub struct App {
     pub every: Interval,
     pub raw_direction: Direction,
     pub repeats: Repeats,
+    pub store: StoreState,
 }
 
 impl App {
@@ -194,6 +196,7 @@ impl App {
             every: Interval::default(),
             raw_direction: Direction::ToServer,
             repeats: Repeats::default(),
+            store: StoreState::default(),
         }
     }
 
@@ -240,6 +243,8 @@ impl App {
             UiEvent::Notice(text) => self.log_console(text),
             UiEvent::Automatic(step) => self.handle_step(step),
             UiEvent::Failed(reason) => self.phase = Phase::Failed(reason),
+            UiEvent::Catalog(event) => self.store.handle_catalog(event),
+            UiEvent::StoreInstall { title, progress } => self.store.handle_install(title, progress),
         }
     }
 
