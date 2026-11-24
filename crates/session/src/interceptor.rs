@@ -1,6 +1,6 @@
 use std::future::Future;
 
-use bobba_protocol::{HMessage, Packet};
+use bobba_protocol::{Direction, HMessage, Packet};
 
 use crate::session::SessionHandle;
 
@@ -30,6 +30,10 @@ pub trait Interceptor: Send + Sync + 'static {
     fn intercept(&self, message: HMessage) -> impl Future<Output = Verdict> + Send;
 
     fn on_disconnected(&self) -> impl Future<Output = ()> + Send;
+
+    fn is_known_header(&self, _direction: Direction, _header_id: u16) -> bool {
+        true
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy)]

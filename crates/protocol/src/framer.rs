@@ -2,7 +2,7 @@ use bytes::BytesMut;
 
 use crate::packet::Packet;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Framer {
     buf: BytesMut,
 }
@@ -40,6 +40,11 @@ impl Framer {
         }
         let frame = self.buf.split_to(total).freeze();
         Some(Packet::from_frame(frame).map_err(|_| FrameError::InvalidLength(len)))
+    }
+
+    pub fn peek_length(&self) -> Option<u32> {
+        let bytes = self.buf.get(..4)?;
+        Some(u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
     }
 
     pub fn take_remaining(&mut self) -> BytesMut {

@@ -334,7 +334,8 @@ async fn connect(target: DirectTarget, host: Arc<Host>, ui: smol::channel::Sende
     drop(proxy);
     let (session_events, mut session_events_rx) = mpsc::unbounded_channel();
     let (log, mut log_rx) = mpsc::channel(LOG_CHANNEL_CAPACITY);
-    let (handle, finished) = session.start(host, session_events, log);
+    let (handle, finished) =
+        session.start(host, Arc::new(bobba_session::NoTables), session_events, log);
     let abort_on_drop = AbortOnDrop(handle);
     let mut ticker = tokio::time::interval(LOG_BATCH_INTERVAL);
     let mut batch = Vec::new();

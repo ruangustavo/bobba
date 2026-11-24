@@ -62,27 +62,91 @@ pub fn find_candidates(tables: &[SBox], encrypted: &[u8]) -> Vec<Candidate> {
         .collect()
 }
 
-pub fn choose_key(
-    candidates: Vec<Candidate>,
-    is_known_outgoing: impl Fn(u16) -> bool,
-) -> Option<Rc4> {
+pub fn shortlist(candidates: Vec<Candidate>, is_known_outgoing: impl Fn(u16) -> bool) -> Vec<Rc4> {
     let mut unique: Vec<Candidate> = Vec::with_capacity(candidates.len());
     for candidate in candidates {
         if !unique.iter().any(|kept| kept.fresh == candidate.fresh) {
             unique.push(candidate);
         }
     }
-    if unique.len() > 1 {
-        let plausible: Vec<Candidate> = unique
-            .iter()
-            .filter(|c| c.header_ids.iter().all(|id| is_known_outgoing(*id)))
-            .cloned()
+    let plausible: Vec<Rc4> = unique
+        .iter()
+        .filter(|c| c.header_ids.iter().all(|id| is_known_outgoing(*id)))
+        .map(|c| c.fresh.clone())
+        .collect();
+    if plausible.is_empty() {
+        unique.into_iter().map(|c| c.fresh).collect()
+    } else {
+        plausible
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProbationVerdict {
+    Decided(Box<Rc4>),
+    Undecided(usize),
+    Failed,
+}
+
+#[derive(Debug, Clone)]
+pub struct Probation {
+    probes: Vec<Probe>,
+}
+
+#[derive(Debug, Clone)]
+struct Probe {
+    fresh: Rc4,
+    cursor: Rc4,
+    framer: Framer,
+}
+
+impl Probe {
+    fn feed(&mut self, encrypted: &[u8]) -> bool {
+        let mut plain = encrypted.to_vec();
+        self.cursor.apply(&mut plain);
+        self.framer.push(&plain);
+        while let Some(next) = self.framer.next_packet() {
+            match next {
+                Ok(packet) if packet.frame().len() <= MAX_CLIENT_FRAME => {}
+                _ => return false,
+            }
+        }
+        self.framer
+            .peek_length()
+            .is_none_or(|length| (2..=MAX_CLIENT_FRAME as u32 - 4).contains(&length))
+    }
+}
+
+impl Probation {
+    pub fn new(fresh_states: Vec<Rc4>, encrypted_so_far: &[u8]) -> Self {
+        let probes = fresh_states
+            .into_iter()
+            .map(|fresh| Probe {
+                cursor: fresh.clone(),
+                fresh,
+                framer: Framer::new(),
+            })
             .collect();
-        if !plausible.is_empty() {
-            unique = plausible;
+        let mut probation = Self { probes };
+        probation.feed(encrypted_so_far);
+        probation
+    }
+
+    pub fn feed(&mut self, encrypted: &[u8]) {
+        self.probes.retain_mut(|probe| probe.feed(encrypted));
+    }
+
+    pub fn verdict(&self) -> ProbationVerdict {
+        match self.probes.as_slice() {
+            [] => ProbationVerdict::Failed,
+            [only] => ProbationVerdict::Decided(Box::new(only.fresh.clone())),
+            many => ProbationVerdict::Undecided(many.len()),
         }
     }
-    unique.into_iter().next().map(|c| c.fresh)
+
+    pub fn best_guess(&self) -> Option<Rc4> {
+        self.probes.first().map(|probe| probe.fresh.clone())
+    }
 }
 
 fn decrypt_into_whole_frames(fresh: &Rc4, encrypted: &[u8]) -> Option<Vec<u16>> {
@@ -130,12 +194,12 @@ mod tests {
     fn finds_the_fresh_state_among_decoy_tables() {
         let (fresh, encrypted, scraped) = scraped_after(b"other key", &client_stream());
         let (_, _, decoy) = scraped_after(b"some other process", &client_stream());
-        let candidates = find_candidates(&[decoy, scraped], &encrypted);
-        assert_eq!(choose_key(candidates, |_| true), Some(fresh));
+        let states = shortlist(find_candidates(&[decoy, scraped], &encrypted), |_| true);
+        assert!(states.contains(&fresh));
     }
 
     #[test]
-    fn a_wrong_j_can_also_frame_cleanly_and_known_headers_break_the_tie() {
+    fn known_headers_drop_wrong_j_candidates_that_also_frame_cleanly() {
         let (fresh, encrypted, scraped) = scraped_after(b"shared-secret-from-dh", &client_stream());
         let candidates = find_candidates(&[scraped], &encrypted);
         assert!(
@@ -143,9 +207,29 @@ mod tests {
             "this stream is ambiguous on framing alone"
         );
         let known = [3226u16, 597, 2596];
+        assert_eq!(shortlist(candidates, |id| known.contains(&id)), vec![fresh]);
+    }
+
+    #[test]
+    fn probation_keeps_only_the_state_that_decrypts_what_comes_next() {
+        let fresh = Rc4::new(b"shared-secret-from-dh").expect("key");
+        let mut client = fresh.clone();
+        let mut encrypted = client_stream();
+        client.apply(&mut encrypted);
+        let states = shortlist(find_candidates(&[*client.state()], &encrypted), |_| true);
+        assert!(states.len() > 1);
+
+        let mut probation = Probation::new(states, &encrypted);
+        assert!(matches!(
+            probation.verdict(),
+            ProbationVerdict::Undecided(_)
+        ));
+        let mut next = Packet::builder(2596).i32(7).build().frame().to_vec();
+        client.apply(&mut next);
+        probation.feed(&next);
         assert_eq!(
-            choose_key(candidates, |id| known.contains(&id)),
-            Some(fresh)
+            probation.verdict(),
+            ProbationVerdict::Decided(Box::new(fresh))
         );
     }
 

@@ -79,9 +79,12 @@ pub async fn world(intercept_timeout: Option<Duration>) -> World {
         });
     let (session_events, _) = mpsc::unbounded_channel();
     let (log_tx, log) = mpsc::channel(1024);
-    let _ = session
-        .expect("session")
-        .start(host.clone(), session_events, log_tx);
+    let _ = session.expect("session").start(
+        host.clone(),
+        Arc::new(bobba_session::NoTables),
+        session_events,
+        log_tx,
+    );
     World {
         host,
         extension_port,

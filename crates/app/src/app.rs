@@ -74,6 +74,7 @@ pub struct BobbaApp {
     status: ConnectionStatus,
     packet_info: Option<Arc<PacketInfo>>,
     traffic: Traffic,
+    encrypted: bool,
     extension_port: Option<u16>,
     extensions: Vec<(ExtensionId, ExtensionInfo)>,
     installed: Vec<InstalledState>,
@@ -132,6 +133,7 @@ impl BobbaApp {
             status: ConnectionStatus::Idle,
             packet_info: None,
             traffic: Traffic::default(),
+            encrypted: false,
             extension_port: None,
             extensions: Vec::new(),
             installed: Vec::new(),
@@ -180,7 +182,23 @@ impl BobbaApp {
                 self.status = ConnectionStatus::Connected(info);
                 self.traffic = Traffic::default();
             }
+            UiEvent::Session(SessionEvent::KeyRecovered {
+                candidates,
+                elapsed,
+            }) => {
+                self.encrypted = true;
+                self.log_console(format!(
+                    "Found the client's RC4 key in {} ms ({candidates} candidate states)",
+                    elapsed.as_millis()
+                ));
+            }
+            UiEvent::Session(SessionEvent::KeyRecoveryFailed) => {
+                self.status = ConnectionStatus::Failed(
+                    "Could not find the client's RC4 key, so the connection was closed".into(),
+                );
+            }
             UiEvent::Session(SessionEvent::Ended) => {
+                self.encrypted = false;
                 if !matches!(self.status, ConnectionStatus::Failed(_)) {
                     self.status = ConnectionStatus::Idle;
                 }

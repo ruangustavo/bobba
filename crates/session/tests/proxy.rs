@@ -45,10 +45,12 @@ async fn connect<I: Interceptor>(interceptor: I) -> Harness {
         },);
     let (events_tx, events) = mpsc::unbounded_channel();
     let (log_tx, log) = mpsc::channel(1024);
-    let (handle, _) =
-        session
-            .expect("session starts")
-            .start(Arc::new(interceptor), events_tx, log_tx);
+    let (handle, _) = session.expect("session starts").start(
+        Arc::new(interceptor),
+        Arc::new(bobba_session::NoTables),
+        events_tx,
+        log_tx,
+    );
     Harness {
         client: client.expect("client connects"),
         server: server.expect("hotel accepts"),
