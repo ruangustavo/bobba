@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -5,7 +6,8 @@ use std::time::Duration;
 
 use bobba_extensions::{
     ExtensionHost, ExtensionOutput, GEarthImport, HostConfig, HostEvent, InstalledExtension,
-    Installer, PermissionRequest, ProcessStatus, Processes, Runtime, launch, serve,
+    Installer, PermissionRequest, ProcessStatus, Processes, Runtime, launch, program_available,
+    serve,
 };
 use bobba_intercept::client::{self, ClientState};
 use bobba_intercept::{HOTEL_HOSTS, HostsRedirect, HotelListeners, MemoryScan, resolve_hotels};
@@ -13,7 +15,7 @@ use bobba_protocol::extension_message::HostInfo;
 use bobba_session::{
     DirectProxy, DumpFile, LogEntry, NoTables, SessionEvent, SessionHandle, TableSource, Upstream,
 };
-use bobba_store::{Catalog, Listing, Origin, Store, StoreError};
+use bobba_store::{Catalog, Listing, Origin, Runtime as StoreRuntime, Store, StoreError};
 use bobba_sulek::Sulek;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
@@ -70,6 +72,7 @@ pub enum Command {
     InstallFromStore(String),
     ImportFromGEarth(PathBuf),
     StartExtension(String),
+    CheckRuntimes,
     StopExtension(String),
     UninstallExtension(String),
 }
@@ -118,6 +121,7 @@ pub enum UiEvent {
     Host(HostEvent),
     Permission(PermissionRequest),
     Installed(Vec<InstalledState>),
+    MissingRuntimes(HashSet<StoreRuntime>),
     ExtensionOutput(ExtensionOutput),
     Notice(String),
     Automatic(AutomaticStep),
@@ -293,6 +297,7 @@ async fn run(
         host: host.clone(),
         output,
         processes,
+        missing: HashSet::new(),
         store: Arc::new(Store::with_default_cache()),
         catalog: None,
         store_results,
@@ -300,6 +305,7 @@ async fn run(
     for installed in runner.installer.installed() {
         runner.start(installed.id(), &ui).await;
     }
+    runner.check_runtimes(&ui).await;
     runner.publish(&ui).await;
     runner.browse();
     let scan_ui = ui.clone();
@@ -379,6 +385,7 @@ async fn run(
             Command::InstallFromStore(title) => runner.download(&title, &ui),
             Command::ImportFromGEarth(folder) => runner.import(&folder, &ui).await,
             Command::StartExtension(file_name) => runner.start(&file_name, &ui).await,
+            Command::CheckRuntimes => runner.check_runtimes(&ui).await,
             Command::StopExtension(file_name) => runner.stop(&file_name).await,
             Command::UninstallExtension(file_name) => {
                 runner.stop(&file_name).await;
@@ -403,6 +410,7 @@ struct Runner {
     host: Arc<Host>,
     output: mpsc::UnboundedSender<ExtensionOutput>,
     processes: Processes,
+    missing: HashSet<StoreRuntime>,
     store: Arc<Store>,
     catalog: Option<Catalog>,
     store_results: mpsc::UnboundedSender<StoreResult>,
@@ -447,6 +455,7 @@ impl Runner {
             StoreResult::Loaded(Ok((catalog, origin))) => {
                 self.catalog = Some(catalog.clone());
                 ui.emit(UiEvent::Catalog(CatalogEvent::Loaded { catalog, origin }));
+                self.check_runtimes(ui).await;
             }
             StoreResult::Loaded(Err(error)) => {
                 ui.emit(UiEvent::Catalog(CatalogEvent::Unreachable(
@@ -537,6 +546,42 @@ impl Runner {
         }
     }
 
+    async fn check_runtimes(&mut self, ui: &UiSink) {
+        let installed = self.installer.installed();
+        let needed: HashSet<StoreRuntime> = self
+            .catalog
+            .iter()
+            .flat_map(|catalog| catalog.listings.iter().flat_map(Listing::runtimes))
+            .chain(installed.iter().filter_map(installed_runtime))
+            .collect();
+        let previous = self.missing.clone();
+        let missing = tokio::task::spawn_blocking(move || {
+            needed
+                .into_iter()
+                .filter(|runtime| !program_available(runtime.program()))
+                .collect::<HashSet<_>>()
+        })
+        .await
+        .unwrap_or_else(|_| previous.clone());
+        let found: HashSet<StoreRuntime> = previous.difference(&missing).copied().collect();
+        self.missing = missing.clone();
+        ui.emit(UiEvent::MissingRuntimes(missing));
+        for extension in installed {
+            let status = self.processes.status(extension.id());
+            if let Some(runtime) = found_for(installed_runtime(&extension), status, &found) {
+                let name = match &extension {
+                    InstalledExtension::Package(package) => package.title.clone(),
+                    InstalledExtension::Single(_) => extension.id().to_owned(),
+                };
+                ui.emit(UiEvent::Notice(format!(
+                    "{} found, starting {name}",
+                    runtime.name()
+                )));
+                self.start(extension.id(), ui).await;
+            }
+        }
+    }
+
     async fn stop(&mut self, file_name: &str) {
         self.processes.stop(file_name).await;
     }
@@ -553,6 +598,30 @@ impl Runner {
             .collect();
         ui.emit(UiEvent::Installed(states));
     }
+}
+
+fn installed_runtime(extension: &InstalledExtension) -> Option<StoreRuntime> {
+    match extension {
+        InstalledExtension::Single(single) => match single.runtime {
+            Runtime::Java => Some(StoreRuntime::Java),
+            Runtime::Python => Some(StoreRuntime::Python),
+            Runtime::Node => Some(StoreRuntime::NodeJs),
+            Runtime::Executable => None,
+        },
+        InstalledExtension::Package(package) => package
+            .command
+            .first()
+            .and_then(|program| StoreRuntime::of_program(program)),
+    }
+}
+
+fn found_for(
+    runtime: Option<StoreRuntime>,
+    status: ProcessStatus,
+    found: &HashSet<StoreRuntime>,
+) -> Option<StoreRuntime> {
+    let quit = matches!(status, ProcessStatus::Exited { .. });
+    runtime.filter(|runtime| quit && found.contains(runtime))
 }
 
 async fn connect(target: DirectTarget, host: Arc<Host>, ui: UiSink) {
@@ -695,5 +764,30 @@ struct AbortOnDrop(SessionHandle);
 impl Drop for AbortOnDrop {
     fn drop(&mut self) {
         self.0.abort();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_an_extension_that_quit_restarts_when_its_runtime_appears() {
+        let found = HashSet::from([StoreRuntime::Java]);
+        let exited = ProcessStatus::Exited { code: Some(1) };
+        assert_eq!(
+            found_for(Some(StoreRuntime::Java), exited, &found),
+            Some(StoreRuntime::Java)
+        );
+        assert_eq!(
+            found_for(Some(StoreRuntime::Java), ProcessStatus::Stopped, &found),
+            None
+        );
+        assert_eq!(
+            found_for(Some(StoreRuntime::Java), ProcessStatus::Running, &found),
+            None
+        );
+        assert_eq!(found_for(Some(StoreRuntime::Python), exited, &found), None);
+        assert_eq!(found_for(None, exited, &found), None);
     }
 }

@@ -2,6 +2,8 @@ use std::collections::HashMap;
 
 use serde::Deserialize;
 
+use crate::runtime::Runtime;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Os {
     Mac,
@@ -60,6 +62,25 @@ pub struct Catalog {
     pub listings: Vec<Listing>,
     pub categories: Vec<Category>,
     pub frameworks: Vec<Framework>,
+}
+
+impl Listing {
+    pub fn runtimes(&self) -> Vec<Runtime> {
+        let mut runtimes = Vec::new();
+        let found = self
+            .command
+            .first()
+            .and_then(|program| Runtime::of_program(program));
+        for runtime in found
+            .into_iter()
+            .chain(Runtime::of_framework(&self.framework))
+        {
+            if !runtimes.contains(&runtime) {
+                runtimes.push(runtime);
+            }
+        }
+        runtimes
+    }
 }
 
 impl Catalog {
@@ -321,6 +342,47 @@ mod tests {
             Some("https://example.test/node")
         );
         assert_eq!(catalog.categories[0].name, "Building");
+    }
+
+    fn listing_with(framework: &str, command: &str) -> Listing {
+        let item = extension("Any", "")
+            .replace(
+                r#""name": "Native", "version""#,
+                &format!(r#""name": "{framework}", "version""#),
+            )
+            .replace(r#"["java", "-jar", "a.jar"]"#, command);
+        parse(&[item], Os::Windows).listings.remove(0)
+    }
+
+    #[test]
+    fn a_listing_needs_the_runtime_of_its_command_and_of_its_framework() {
+        let needs = |framework, command| listing_with(framework, command).runtimes();
+        assert_eq!(
+            needs("Native", r#"["java", "-jar", "a.jar"]"#),
+            [Runtime::Java]
+        );
+        assert_eq!(
+            needs(
+                "G-Node",
+                r#"["java", "-jar", "NodeExtensionSetup.jar", "-npm", "start"]"#
+            ),
+            [Runtime::Java, Runtime::NodeJs]
+        );
+        assert_eq!(
+            needs("G-Node", r#"["node", "index.js"]"#),
+            [Runtime::NodeJs]
+        );
+        assert_eq!(
+            needs("G-Python", r#"["python", "main.py"]"#),
+            [Runtime::Python]
+        );
+        assert_eq!(needs("QX", r#"["cmd", "/C", "QX.exe"]"#), [Runtime::DotNet]);
+        assert_eq!(
+            needs("Geode", r#"["cmd", "/C", "LTDHelper.exe"]"#),
+            [Runtime::DotNet]
+        );
+        assert_eq!(needs("Xabbo", r#"["cmd", "/C", "xabbo.exe"]"#), []);
+        assert_eq!(needs("GoEarth", r#"["/bin/sh", "-c", "./a"]"#), []);
     }
 
     #[test]

@@ -1,4 +1,4 @@
-use bobba_store::{Listing, Origin};
+use bobba_store::{Listing, Origin, Runtime};
 use rune::tok::TextStyle;
 use rune::{
     Anim, El, Icon, ScrollSpec, Spring, SpringPair, Transition, Tx, col, el, icon, oklch, row, text,
@@ -102,39 +102,38 @@ fn action(listing: &Listing, status: &ListingStatus) -> El {
             .variant(ButtonVariant::Outline)
             .on_press(install(&listing.title))
             .build(k),
-        ListingStatus::NeedsRuntime {
-            runtime,
-            guide: Some(guide),
-        } => {
-            let guide = guide.clone();
-            Button::new(format!("Get {runtime}"))
+        ListingStatus::NeedsRuntime { first, .. } => {
+            let guide = first.guide();
+            Button::new(format!("Get {}", first.name()))
                 .variant(ButtonVariant::Outline)
                 .help(format!(
-                    "{} needs {runtime}. Opens its install guide.",
-                    listing.title
+                    "{} needs {}. Opens its install guide.",
+                    listing.title,
+                    first.name()
                 ))
                 .on_press_tx(move |_: &mut App, tx: &mut Tx| {
-                    let _ = tx.open_url(&guide);
+                    let _ = tx.open_url(guide);
                 })
                 .build(k)
         }
-        ListingStatus::NeedsRuntime {
-            runtime,
-            guide: None,
-        } => Button::new("Install")
-            .variant(ButtonVariant::Outline)
-            .help(format!(
-                "{} needs {runtime}, which Bobba could not find.",
-                listing.title
-            ))
-            .on_press(install(&listing.title))
-            .build(k),
         ListingStatus::Failed(_) => Button::new("Try again")
             .variant(ButtonVariant::Outline)
             .on_press(install(&listing.title))
             .build(k),
     }
     .key(key)
+}
+
+fn missing(first: Runtime, rest: &[Runtime]) -> (String, bool) {
+    let names: Vec<&str> = std::iter::once(first)
+        .chain(rest.iter().copied())
+        .map(Runtime::name)
+        .collect();
+    let joined = match names.split_last() {
+        Some((last, init)) if !init.is_empty() => format!("{} and {last}", init.join(", ")),
+        _ => first.name().to_owned(),
+    };
+    (joined, !rest.is_empty())
 }
 
 fn notice(listing: &Listing, status: &ListingStatus) -> Option<El> {
@@ -150,13 +149,21 @@ fn notice(listing: &Listing, status: &ListingStatus) -> Option<El> {
             ),
         ),
         ListingStatus::Failed(reason) => (&ALERT, p.red, format!("Could not install: {reason}")),
-        ListingStatus::NeedsRuntime { runtime, .. } => (
-            &ALERT,
-            p.amber,
-            format!(
-                "Needs {runtime}, which is not installed on this computer. Install it, then come back to install this extension."
-            ),
-        ),
+        ListingStatus::NeedsRuntime { first, rest } => {
+            let (names, plural) = missing(*first, rest);
+            let (are, them) = if plural {
+                ("are", "them")
+            } else {
+                ("is", "it")
+            };
+            (
+                &ALERT,
+                p.amber,
+                format!(
+                    "Needs {names}, which {are} not installed on this computer. Install {them}, then come back to install this extension."
+                ),
+            )
+        }
         _ => return None,
     };
     Some(
@@ -182,8 +189,10 @@ fn listing_row(s: &App, listing: &Listing, selected: bool) -> El {
     let status = s.store.status(listing, &s.installed);
     let subtitle = match &status {
         ListingStatus::Failed(reason) => text(format!("Could not install: {reason}")).color(p.red),
-        ListingStatus::NeedsRuntime { runtime, .. } => {
-            text(format!("Needs {runtime}, which is not installed")).color(p.amber)
+        ListingStatus::NeedsRuntime { first, rest } => {
+            let (names, plural) = missing(*first, rest);
+            let are = if plural { "are" } else { "is" };
+            text(format!("Needs {names}, which {are} not installed")).color(p.amber)
         }
         _ => text(listing.description.clone()).color(k.c.text_muted),
     };

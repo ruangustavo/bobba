@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use bobba_store::{Catalog, Listing, Origin, is_newer};
+use bobba_store::{Catalog, Listing, Origin, Runtime, is_newer};
 use rune::TextEdit;
 
 use crate::backend::{CatalogEvent, InstalledKind, InstalledState, StoreInstall};
@@ -24,13 +24,8 @@ pub enum ListingStatus {
     Available,
     Downloading,
     Installed,
-    Update {
-        installed: String,
-    },
-    NeedsRuntime {
-        runtime: String,
-        guide: Option<String>,
-    },
+    Update { installed: String },
+    NeedsRuntime { first: Runtime, rest: Vec<Runtime> },
     Failed(String),
 }
 
@@ -41,7 +36,7 @@ pub struct StoreState {
     pub category: Option<String>,
     pub query: TextEdit,
     installs: HashMap<String, StoreInstall>,
-    missing_programs: HashSet<String>,
+    missing_runtimes: HashSet<Runtime>,
 }
 
 impl Default for StoreState {
@@ -53,7 +48,7 @@ impl Default for StoreState {
             category: None,
             query: TextEdit::new(""),
             installs: HashMap::new(),
-            missing_programs: HashSet::new(),
+            missing_runtimes: HashSet::new(),
         }
     }
 }
@@ -77,21 +72,12 @@ impl StoreState {
         }
     }
 
-    pub fn refresh_programs(&mut self, available: impl Fn(&str) -> bool) {
-        let programs: HashSet<String> = self
-            .catalog()
-            .map(|catalog| {
-                catalog
-                    .listings
-                    .iter()
-                    .filter_map(|l| l.command.first().cloned())
-                    .collect()
-            })
-            .unwrap_or_default();
-        self.missing_programs = programs
-            .into_iter()
-            .filter(|program| !available(program))
-            .collect();
+    pub fn handle_missing(&mut self, missing: HashSet<Runtime>) {
+        self.missing_runtimes = missing;
+    }
+
+    pub fn misses_runtimes(&self) -> bool {
+        !self.missing_runtimes.is_empty()
     }
 
     pub fn needs_catalog(&self) -> bool {
@@ -152,18 +138,19 @@ impl StoreState {
                 ListingStatus::Update { installed: version }
             }
             Some(_) => ListingStatus::Installed,
-            None => match listing.command.first() {
-                Some(program) if self.missing_programs.contains(program) => {
-                    ListingStatus::NeedsRuntime {
-                        runtime: runtime_name(program),
-                        guide: self
-                            .catalog()
-                            .and_then(|c| c.framework(&listing.framework))
-                            .and_then(|f| f.instructions.clone()),
-                    }
+            None => {
+                let mut missing = listing
+                    .runtimes()
+                    .into_iter()
+                    .filter(|runtime| self.missing_runtimes.contains(runtime));
+                match missing.next() {
+                    Some(first) => ListingStatus::NeedsRuntime {
+                        first,
+                        rest: missing.collect(),
+                    },
+                    None => ListingStatus::Available,
                 }
-                _ => ListingStatus::Available,
-            },
+            }
         }
     }
 
@@ -174,25 +161,12 @@ impl StoreState {
     }
 }
 
-fn runtime_name(program: &str) -> String {
-    let stem = std::path::Path::new(program)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or(program)
-        .to_ascii_lowercase();
-    match stem.as_str() {
-        "java" | "javaw" => "Java".into(),
-        "node" => "Node.js".into(),
-        "python" | "python3" | "py" => "Python".into(),
-        "dotnet" => ".NET".into(),
-        _ => program.into(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use bobba_extensions::ProcessStatus;
-    use bobba_store::Os;
+    use std::collections::HashSet;
+
+    use bobba_store::{Os, Runtime};
 
     use super::*;
 
@@ -290,12 +264,12 @@ mod tests {
         let mut store = loaded();
         let mapper = store.catalog().expect("loaded").listings[0].clone();
 
-        store.refresh_programs(|program| program != "java");
+        store.handle_missing(HashSet::from([Runtime::Java]));
         assert_eq!(
             store.status(&mapper, &[]),
             ListingStatus::NeedsRuntime {
-                runtime: "Java".into(),
-                guide: None,
+                first: Runtime::Java,
+                rest: vec![],
             }
         );
         assert_eq!(
@@ -303,8 +277,41 @@ mod tests {
             ListingStatus::Installed
         );
 
-        store.refresh_programs(|_| true);
+        store.handle_missing(HashSet::new());
         assert_eq!(store.status(&mapper, &[]), ListingStatus::Available);
+    }
+
+    #[test]
+    fn a_node_extension_started_by_java_needs_both() {
+        let mut store = StoreState::default();
+        let extensions = EXTENSIONS.replacen(
+            r#""framework": {"name": "Native"}"#,
+            r#""framework": {"name": "G-Node"}"#,
+            1,
+        );
+        let catalog = Catalog::parse(CONFIG, &extensions, Os::Mac).expect("parses");
+        store.handle_catalog(CatalogEvent::Loaded {
+            catalog,
+            origin: Origin::Fresh,
+        });
+        let mapper = store.catalog().expect("loaded").listings[0].clone();
+
+        store.handle_missing(HashSet::from([Runtime::Java, Runtime::NodeJs]));
+        assert_eq!(
+            store.status(&mapper, &[]),
+            ListingStatus::NeedsRuntime {
+                first: Runtime::Java,
+                rest: vec![Runtime::NodeJs],
+            }
+        );
+        store.handle_missing(HashSet::from([Runtime::NodeJs]));
+        assert_eq!(
+            store.status(&mapper, &[]),
+            ListingStatus::NeedsRuntime {
+                first: Runtime::NodeJs,
+                rest: vec![],
+            }
+        );
     }
 
     #[test]

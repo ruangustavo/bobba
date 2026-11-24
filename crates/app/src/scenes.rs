@@ -344,7 +344,9 @@ fn store(s: &mut App) {
             origin: Origin::Fresh,
         });
     }
-    s.store.refresh_programs(|program| program != "node");
+    s.store.handle_missing(std::collections::HashSet::from([
+        bobba_store::Runtime::NodeJs,
+    ]));
     s.store.showing = Showing::Store;
 }
 

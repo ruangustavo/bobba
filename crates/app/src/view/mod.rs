@@ -41,5 +41,9 @@ pub fn root(s: &App, cx: &mut Cx<App>) -> El {
         )
         .child(el().key("statusbar-rule").w_full().h(1.0).fill(p.hairline))
         .child(chrome::status_bar(s));
-    rune_kit::root(page, layer)
+    rune_kit::root(page, layer).on_window_focus(|s: &mut App, focused, _| {
+        if focused {
+            s.check_runtimes();
+        }
+    })
 }

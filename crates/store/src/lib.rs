@@ -1,9 +1,11 @@
 mod catalog;
+mod runtime;
 
 use std::path::PathBuf;
 use std::time::Duration;
 
 pub use catalog::{Catalog, Category, Framework, Listing, Os, is_newer};
+pub use runtime::Runtime;
 
 pub const STORE_SOURCE: &str =
     "https://raw.githubusercontent.com/sirjonasxx/G-ExtensionStore/repo/1.5.3";

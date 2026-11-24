@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use bobba::backend::{
     AutomaticStep, CatalogEvent, InstalledKind, InstalledState, StoreInstall, UiEvent,
 };
@@ -573,6 +575,16 @@ fn an_extension_that_quits_on_its_own_says_why_and_can_start_again() {
     assert!(shows_text(&rt, "exited · Unable to locate a Java Runtime."));
     assert!(!shows_text(&rt, "starting"));
     assert!(shown(&rt, "installed-start-presets_1.2.13"));
+}
+
+#[test]
+fn the_store_follows_the_runtimes_the_backend_finds() {
+    let mut rt = runtime("store");
+    assert!(shows_text(&rt, "Get Node.js"));
+    rt.update(|s, _| s.handle(UiEvent::MissingRuntimes(HashSet::new())));
+    settle(&mut rt);
+    assert!(!shows_text(&rt, "Get Node.js"));
+    assert!(!shows_text(&rt, "Needs Node.js"));
 }
 
 #[test]
