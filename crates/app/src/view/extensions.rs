@@ -1,12 +1,14 @@
 use rune::tok::TextStyle;
-use rune::{Color, El, FileDialogOptions, Key, KeyEvent, ScrollSpec, Tx, col, el, row, text};
+use std::path::Path;
+
+use rune::{Color, El, FileDialogOptions, Key, KeyEvent, ScrollSpec, Tx, col, el, icon, row, text};
 use rune_kit::{
-    Badge, BadgeVariant, Button, ButtonVariant, ControlSize, IconButton, IconButtonVariant,
+    Badge, BadgeVariant, Button, ButtonVariant, ControlSize, IconButton, IconButtonVariant, Loader,
     SegmentedControl,
 };
 
 use crate::backend::{Command, InstalledKind};
-use crate::state::App;
+use crate::state::{App, GEarthOffer};
 use crate::store::Showing;
 use crate::view::store;
 use crate::view::theme::{Paint, paint};
@@ -16,6 +18,95 @@ static PLAY: rune::Icon = rune::Icon {
     view: 16.0,
     body: r#"<path d="M4.75 3.5L12.55 8L4.75 12.5Z" fill="currentColor" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round"/>"#,
 };
+
+static INFO: rune::Icon = rune::Icon {
+    name: "bobba-info",
+    view: 16.0,
+    body: r#"<circle cx="8" cy="8" r="6.3" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M8 7.2v4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><circle cx="8" cy="4.9" r="0.85" fill="currentColor"/>"#,
+};
+
+#[cfg(target_os = "macos")]
+fn shown_path(path: &Path) -> String {
+    match dirs::home_dir().and_then(|home| path.strip_prefix(home).ok().map(Path::to_owned)) {
+        Some(relative) => format!("~/{}", relative.display()),
+        None => path.display().to_string(),
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn shown_path(path: &Path) -> String {
+    path.display().to_string()
+}
+
+fn choose_gearth(_: &mut App, tx: &mut Tx) {
+    let options = FileDialogOptions {
+        title: "Choose the G-Earth folder".into(),
+        ..Default::default()
+    };
+    tx.open_folder(options, |s: &mut App, result, _| match result {
+        Ok(Some(folder)) => s.import_from_gearth(folder),
+        Ok(None) => {}
+        Err(error) => s.log_console(format!("Could not open the folder picker: {error}")),
+    });
+}
+
+fn gearth_banner(s: &App) -> Option<El> {
+    let p = paint();
+    let k = &p.kit;
+    let (title, detail, actions) = match &s.gearth {
+        GEarthOffer::Found { folder, count } => {
+            let folder = folder.clone();
+            (
+                format!("Found {count} extensions in G-Earth"),
+                shown_path(&folder),
+                vec![
+                    Button::new("Not now")
+                        .variant(ButtonVariant::GhostMuted)
+                        .on_press(|s: &mut App| s.gearth = GEarthOffer::Dismissed)
+                        .build(k)
+                        .key("gearth-import-dismiss"),
+                    Button::new("Import")
+                        .variant(ButtonVariant::Contrast)
+                        .on_press(move |s: &mut App| s.import_from_gearth(folder.clone()))
+                        .build(k)
+                        .key("gearth-import-accept"),
+                ],
+            )
+        }
+        GEarthOffer::Importing => (
+            "Importing extensions from G-Earth".to_owned(),
+            "They start as soon as they are copied".to_owned(),
+            vec![Loader::new().build(k)],
+        ),
+        GEarthOffer::None | GEarthOffer::Dismissed => return None,
+    };
+    Some(
+        row()
+            .key("gearth-import")
+            .w_full()
+            .padding(14.0)
+            .gap(12.0)
+            .center_y()
+            .radius(12.0)
+            .fill(p.blue.alpha(0.12))
+            .border(1.0, p.blue.alpha(0.35))
+            .child(icon(&INFO, 16.0).color(p.blue))
+            .child(
+                col()
+                    .gap(3.0)
+                    .grow(1.0)
+                    .shrink()
+                    .child(text(title).font(k.ty.ui_medium).color(k.c.text_base))
+                    .child(
+                        text(detail)
+                            .font(k.ty.small)
+                            .color(k.c.text_muted)
+                            .truncate(),
+                    ),
+            )
+            .children(actions),
+    )
+}
 
 fn install(_: &mut App, tx: &mut Tx) {
     let options = FileDialogOptions {
@@ -169,6 +260,11 @@ pub fn view(s: &App) -> El {
             "The G-ExtensionStore has ready-made extensions for Flash".into(),
             el(),
             vec![
+                Button::new("Import from G-Earth")
+                    .variant(ButtonVariant::Outline)
+                    .on_press_tx(choose_gearth)
+                    .build(k)
+                    .key("extensions-empty-gearth"),
                 Button::new("Browse store")
                     .variant(ButtonVariant::Contrast)
                     .on_press(|s: &mut App| s.show(Showing::Store))
@@ -240,10 +336,27 @@ pub fn view(s: &App) -> El {
             .w_full()
             .grow(1.0)
             .min_h(0.0)
-            .scroll(ScrollSpec {
-                stick_bottom: false,
-            })
-            .child(list),
+            .gap(12.0)
+            .children(gearth_banner(s))
+            .child(
+                col()
+                    .w_full()
+                    .grow(1.0)
+                    .min_h(0.0)
+                    .scroll(ScrollSpec {
+                        stick_bottom: false,
+                    })
+                    .child(list)
+                    .child(
+                        row().w_full().pt(8.0).justify_end().child(
+                            Button::new("Import from G-Earth…")
+                                .variant(ButtonVariant::GhostMuted)
+                                .on_press_tx(choose_gearth)
+                                .build(k)
+                                .key("gearth-import-choose"),
+                        ),
+                    ),
+            ),
         Showing::Store => store::view(s),
     };
     col()

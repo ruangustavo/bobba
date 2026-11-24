@@ -87,7 +87,7 @@ impl InstalledExtension {
 }
 
 impl Package {
-    fn read(dir: PathBuf) -> Option<Self> {
+    pub(crate) fn read(dir: PathBuf) -> Option<Self> {
         let folder = dir.file_name()?.to_str()?.to_owned();
         let (title, version) = folder.rsplit_once('_')?;
         let raw = std::fs::read_to_string(dir.join(COMMAND_FILE)).ok()?;

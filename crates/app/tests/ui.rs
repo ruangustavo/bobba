@@ -538,3 +538,42 @@ fn with_no_extensions_yet_the_list_points_to_the_store() {
     press(&mut rt, "extensions-empty-browse");
     assert_eq!(rt.state.store.showing, Showing::Store);
 }
+
+fn gearth_found(rt: &mut Runtime<App>) {
+    rt.update(|s, _| {
+        s.handle(UiEvent::GEarthFound {
+            folder: std::path::PathBuf::from("/Users/player/Downloads/G-Earth"),
+            count: 4,
+        })
+    });
+    settle(rt);
+}
+
+#[test]
+fn extensions_found_in_gearth_are_offered_until_dismissed() {
+    let mut rt = runtime("extensions");
+    assert!(!shown(&rt, "gearth-import"));
+    gearth_found(&mut rt);
+    assert!(shows_text(&rt, "Found 4 extensions in G-Earth"));
+
+    press(&mut rt, "gearth-import-dismiss");
+    assert!(!shown(&rt, "gearth-import"));
+}
+
+#[test]
+fn importing_from_gearth_says_it_is_working_then_how_many_came() {
+    let mut rt = runtime("extensions");
+    gearth_found(&mut rt);
+    press(&mut rt, "gearth-import-accept");
+    assert!(shows_text(&rt, "Importing"));
+
+    rt.update(|s, _| s.handle(UiEvent::GEarthImported(Ok(4))));
+    settle(&mut rt);
+    assert!(!shown(&rt, "gearth-import"));
+    assert!(
+        rt.state
+            .console
+            .iter()
+            .any(|line| line.contains("Imported 4"))
+    );
+}

@@ -468,6 +468,7 @@ dependencies = [
  "bobba-session",
  "bobba-store",
  "bobba-sulek",
+ "dirs",
  "rune",
  "rune-kit",
  "tokio",

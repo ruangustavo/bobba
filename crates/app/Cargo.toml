@@ -14,3 +14,4 @@ bobba-store.workspace = true
 rune.workspace = true
 rune-kit.workspace = true
 tokio.workspace = true
+dirs.workspace = true

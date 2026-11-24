@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
 use bobba_extensions::{
-    ExtensionHost, ExtensionOutput, HostConfig, HostEvent, InstalledExtension, Installer,
-    PermissionRequest, Runtime, launch, serve,
+    ExtensionHost, ExtensionOutput, GEarthImport, HostConfig, HostEvent, InstalledExtension,
+    Installer, PermissionRequest, Runtime, launch, serve,
 };
 use bobba_intercept::client::{self, ClientState};
 use bobba_intercept::{HOTEL_HOSTS, HostsRedirect, HotelListeners, MemoryScan, resolve_hotels};
@@ -70,6 +70,7 @@ pub enum Command {
     InstallExtension(PathBuf),
     BrowseStore,
     InstallFromStore(String),
+    ImportFromGEarth(PathBuf),
     StartExtension(String),
     StopExtension(String),
     UninstallExtension(String),
@@ -124,6 +125,11 @@ pub enum UiEvent {
     Automatic(AutomaticStep),
     Failed(String),
     Catalog(CatalogEvent),
+    GEarthFound {
+        folder: PathBuf,
+        count: usize,
+    },
+    GEarthImported(Result<usize, String>),
     StoreInstall {
         title: String,
         progress: StoreInstall,
@@ -297,6 +303,23 @@ async fn run(
     }
     runner.publish(&ui).await;
     runner.browse();
+    let scan_ui = ui.clone();
+    tokio::task::spawn_blocking(move || {
+        let roots: Vec<PathBuf> = [
+            dirs::download_dir(),
+            dirs::desktop_dir(),
+            dirs::document_dir(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        if let Some(found) = GEarthImport::find(&roots, &Installer::with_default_dir()) {
+            scan_ui.emit(UiEvent::GEarthFound {
+                count: found.extensions.len(),
+                folder: found.folder,
+            });
+        }
+    });
     let forward_ui = ui.clone();
     tokio::spawn(async move {
         loop {
@@ -349,6 +372,7 @@ async fn run(
             },
             Command::BrowseStore => runner.browse(),
             Command::InstallFromStore(title) => runner.download(&title, &ui),
+            Command::ImportFromGEarth(folder) => runner.import(&folder, &ui).await,
             Command::StartExtension(file_name) => runner.start(&file_name, &ui).await,
             Command::StopExtension(file_name) => runner.stop(&file_name).await,
             Command::UninstallExtension(file_name) => {
@@ -434,6 +458,27 @@ impl Runner {
                     Err(reason) => StoreInstall::Failed(reason),
                 };
                 ui.emit(UiEvent::StoreInstall { title, progress });
+            }
+        }
+    }
+
+    async fn import(&mut self, folder: &Path, ui: &UiSink) {
+        let Some(found) = GEarthImport::from_folder(folder, &self.installer) else {
+            ui.emit(UiEvent::GEarthImported(Err(format!(
+                "{} has no G-Earth extensions that Bobba does not have yet",
+                folder.display()
+            ))));
+            return;
+        };
+        match found.import(&self.installer) {
+            Ok(ids) => {
+                for id in &ids {
+                    self.start(id, ui).await;
+                }
+                ui.emit(UiEvent::GEarthImported(Ok(ids.len())));
+            }
+            Err(error) => {
+                ui.emit(UiEvent::GEarthImported(Err(error.to_string())));
             }
         }
     }

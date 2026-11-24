@@ -10,7 +10,7 @@ use bobba_session::{ConnectionInfo, LogEntry, Outcome};
 use bobba_store::{Catalog, Origin, Os};
 
 use crate::backend::{CatalogEvent, InstalledKind, InstalledState};
-use crate::state::{App, KeyState, Mode, Phase, Tab, Traffic};
+use crate::state::{App, GEarthOffer, KeyState, Mode, Phase, Tab, Traffic};
 use crate::store::Showing;
 
 const RELEASE: &str = "MAC63-202611201617-213322612";
@@ -45,6 +45,25 @@ pub const SCENES: &[Scene] = &[
     ("injection", injection),
     ("extensions", extensions),
     ("store", store),
+    ("gearth", |s| {
+        extensions(s);
+        s.gearth = GEarthOffer::Found {
+            folder: dirs::home_dir()
+                .unwrap_or_default()
+                .join("Downloads")
+                .join("G-Earth"),
+            count: 4,
+        };
+    }),
+    ("gearth-windows", |s| {
+        extensions(s);
+        s.gearth = GEarthOffer::Found {
+            folder: PathBuf::from(
+                r"C:\Users\Jogador\OneDrive\Área de Trabalho\Programas do Habbo\G-Earth 1.5.4 (Windows)",
+            ),
+            count: 12,
+        };
+    }),
     ("permission", permission),
 ];
 

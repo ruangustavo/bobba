@@ -25,6 +25,14 @@ pub const DEFAULT_HOTEL: &str = "game-br.habbo.com";
 pub const DEFAULT_GAME_PORT: &str = "30000";
 pub const INJECTION_NAME: &str = "Injection";
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GEarthOffer {
+    None,
+    Found { folder: PathBuf, count: usize },
+    Importing,
+    Dismissed,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
     Connection,
@@ -166,6 +174,7 @@ pub struct App {
     pub raw_direction: Direction,
     pub repeats: Repeats,
     pub store: StoreState,
+    pub gearth: GEarthOffer,
 }
 
 impl App {
@@ -199,6 +208,7 @@ impl App {
             raw_direction: Direction::ToServer,
             repeats: Repeats::default(),
             store: StoreState::default(),
+            gearth: GEarthOffer::None,
         }
     }
 
@@ -250,6 +260,18 @@ impl App {
                 self.refresh_programs();
             }
             UiEvent::StoreInstall { title, progress } => self.store.handle_install(title, progress),
+            UiEvent::GEarthFound { folder, count } => {
+                if self.gearth == GEarthOffer::None {
+                    self.gearth = GEarthOffer::Found { folder, count };
+                }
+            }
+            UiEvent::GEarthImported(result) => {
+                self.gearth = GEarthOffer::Dismissed;
+                self.log_console(match result {
+                    Ok(count) => format!("Imported {count} extensions from G-Earth"),
+                    Err(reason) => format!("Could not import from G-Earth: {reason}"),
+                });
+            }
         }
     }
 
@@ -424,6 +446,11 @@ impl App {
             self.store.catalog = CatalogState::Loading;
             self.send(Command::BrowseStore);
         }
+    }
+
+    pub fn import_from_gearth(&mut self, folder: PathBuf) {
+        self.gearth = GEarthOffer::Importing;
+        self.send(Command::ImportFromGEarth(folder));
     }
 
     pub fn toggle_store_detail(&mut self, title: &str) {
