@@ -1,3 +1,0 @@
-2026-11-24 01:56:02.025 INFO  gearth.app.GEarth - Starting G-Earth 1.5.4-beta-29 from repository G-Realm/G-Earth
-2026-11-24 01:56:02.052 DEBUG g.a.s.e.e.i.n.NetworkExtensionServer - Found open port 9092, attempting to bind...
-2026-11-24 01:56:02.074 DEBUG g.a.s.e.e.i.n.NetworkExtensionServer - Successfully bound to port 9092
