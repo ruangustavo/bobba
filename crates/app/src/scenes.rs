@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use bobba_extensions::Runtime;
+use bobba_extensions::{ProcessStatus, Runtime};
 use bobba_protocol::extension_message::ExtensionInfo;
 use bobba_protocol::{Direction, Packet, PacketInfo, PacketInfoEntry};
 use bobba_session::{ConnectionInfo, LogEntry, Outcome};
@@ -233,12 +233,12 @@ fn extensions(s: &mut App) {
         InstalledState {
             id: "antispam-48120.py".into(),
             kind: InstalledKind::Single(Runtime::Python),
-            running: true,
+            status: ProcessStatus::Running,
         },
         InstalledState {
             id: "wired-helper-90314.jar".into(),
             kind: InstalledKind::Single(Runtime::Java),
-            running: false,
+            status: ProcessStatus::Stopped,
         },
     ];
     for line in [
@@ -285,7 +285,7 @@ fn store(s: &mut App) {
             title: "Wired Helper".into(),
             version: "1.3.0".into(),
         },
-        running: true,
+        status: ProcessStatus::Running,
     });
     let listings = [
         store_listing(

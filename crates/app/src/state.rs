@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -159,6 +159,7 @@ pub struct App {
     pub extensions: Vec<(ExtensionId, ExtensionInfo)>,
     pub installed: Vec<InstalledState>,
     pub console: VecDeque<String>,
+    pub last_output: HashMap<String, String>,
     pub permission_requests: VecDeque<PermissionRequest>,
     pub hotel_host: TextEdit,
     pub hotel_port: TextEdit,
@@ -193,6 +194,7 @@ impl App {
             extensions: Vec::new(),
             installed: Vec::new(),
             console: VecDeque::new(),
+            last_output: HashMap::new(),
             permission_requests: VecDeque::new(),
             hotel_host: TextEdit::new(DEFAULT_HOTEL),
             hotel_port: TextEdit::new(DEFAULT_GAME_PORT),
@@ -234,6 +236,11 @@ impl App {
         changed
     }
 
+    pub fn start_extension(&mut self, id: String) {
+        self.last_output.remove(&id);
+        self.send(Command::StartExtension(id));
+    }
+
     pub fn send(&self, command: Command) {
         if let Some(backend) = &self.backend {
             backend.send(command);
@@ -250,7 +257,8 @@ impl App {
             UiEvent::Permission(request) => self.permission_requests.push_back(request),
             UiEvent::Installed(states) => self.installed = states,
             UiEvent::ExtensionOutput(output) => {
-                self.log_console(format!("[{}] {}", output.file_name, output.line))
+                self.log_console(format!("[{}] {}", output.file_name, output.line));
+                self.last_output.insert(output.file_name, output.line);
             }
             UiEvent::Notice(text) => self.log_console(text),
             UiEvent::Automatic(step) => self.handle_step(step),

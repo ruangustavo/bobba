@@ -191,6 +191,7 @@ fn runtime_name(program: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use bobba_extensions::ProcessStatus;
     use bobba_store::Os;
 
     use super::*;
@@ -225,7 +226,7 @@ mod tests {
                 title: title.into(),
                 version: version.into(),
             },
-            running: true,
+            status: ProcessStatus::Running,
         }
     }
 

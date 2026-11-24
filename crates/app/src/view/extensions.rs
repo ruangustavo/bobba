@@ -6,6 +6,8 @@ use rune_kit::{
     Badge, BadgeVariant, Button, ButtonVariant, ControlSize, IconButton, IconButtonVariant, Loader,
 };
 
+use bobba_extensions::ProcessStatus;
+
 use crate::backend::{Command, InstalledKind};
 use crate::state::{App, GEarthOffer};
 use crate::store::Showing;
@@ -235,17 +237,25 @@ pub fn view(s: &App) -> El {
             InstalledKind::Single(_) => state.id.clone(),
         };
         let title = connected.map_or(fallback, |(_, info)| info.title.clone());
-        let (status, status_color) = match (connected.is_some(), state.running) {
-            (true, _) => ("connected", p.green),
-            (false, true) => ("starting", p.amber),
-            (false, false) => ("stopped", k.c.text_faint),
+        let (status, status_color) = match (connected.is_some(), state.status) {
+            (true, _) => ("connected".to_owned(), p.green),
+            (false, ProcessStatus::Running) => ("starting".to_owned(), p.amber),
+            (false, ProcessStatus::Stopped) => ("stopped".to_owned(), k.c.text_faint),
+            (false, ProcessStatus::Exited { code }) => {
+                let reason = match (s.last_output.get(&state.id), code) {
+                    (Some(line), _) => format!("exited · {line}"),
+                    (None, Some(code)) => format!("exited with code {code}"),
+                    (None, None) => "exited".to_owned(),
+                };
+                (reason, p.red)
+            }
         };
         let detail = match &state.kind {
             InstalledKind::Single(runtime) => format!("{runtime:?} · {status} · {}", state.id),
             InstalledKind::Package { version, .. } => format!("v{version} · {status}"),
         };
         let file = state.id.clone();
-        let toggle = if state.running {
+        let toggle = if state.status == ProcessStatus::Running {
             let file = file.clone();
             Button::new("Stop")
                 .variant(ButtonVariant::Outline)
@@ -255,8 +265,9 @@ pub fn view(s: &App) -> El {
             let file = file.clone();
             Button::new("Start")
                 .variant(ButtonVariant::Contrast)
-                .on_press(move |s: &mut App| s.send(Command::StartExtension(file.clone())))
+                .on_press(move |s: &mut App| s.start_extension(file.clone()))
                 .build(k)
+                .key(format!("installed-start-{}", state.id))
         };
         let uninstall = Button::new("Uninstall")
             .variant(ButtonVariant::GhostMuted)

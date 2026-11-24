@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -6,7 +5,7 @@ use std::time::Duration;
 
 use bobba_extensions::{
     ExtensionHost, ExtensionOutput, GEarthImport, HostConfig, HostEvent, InstalledExtension,
-    Installer, PermissionRequest, Runtime, launch, serve,
+    Installer, PermissionRequest, ProcessStatus, Processes, Runtime, launch, serve,
 };
 use bobba_intercept::client::{self, ClientState};
 use bobba_intercept::{HOTEL_HOSTS, HostsRedirect, HotelListeners, MemoryScan, resolve_hotels};
@@ -17,7 +16,6 @@ use bobba_session::{
 use bobba_store::{Catalog, Listing, Origin, Store, StoreError};
 use bobba_sulek::Sulek;
 use tokio::net::TcpListener;
-use tokio::process::Child;
 use tokio::sync::mpsc;
 
 use crate::setup::Step;
@@ -90,7 +88,7 @@ pub enum AutomaticStep {
 pub struct InstalledState {
     pub id: String,
     pub kind: InstalledKind,
-    pub running: bool,
+    pub status: ProcessStatus,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -288,12 +286,13 @@ async fn run(
         }
     });
     let (store_results, mut store_rx) = mpsc::unbounded_channel::<StoreResult>();
+    let (processes, mut exits) = Processes::new();
     let mut runner = Runner {
         installer: Installer::with_default_dir(),
         port: extension_port,
         host: host.clone(),
         output,
-        running: HashMap::new(),
+        processes,
         store: Arc::new(Store::with_default_cache()),
         catalog: None,
         store_results,
@@ -341,6 +340,12 @@ async fn run(
             Some(result) = store_rx.recv() => {
                 runner.finish(result, &ui).await;
                 runner.publish(&ui).await;
+                continue;
+            }
+            Some(exit) = exits.recv() => {
+                if runner.processes.record(exit) {
+                    runner.publish(&ui).await;
+                }
                 continue;
             }
             else => return,
@@ -397,7 +402,7 @@ struct Runner {
     port: Option<u16>,
     host: Arc<Host>,
     output: mpsc::UnboundedSender<ExtensionOutput>,
-    running: HashMap<String, Child>,
+    processes: Processes,
     store: Arc<Store>,
     catalog: Option<Catalog>,
     store_results: mpsc::UnboundedSender<StoreResult>,
@@ -512,7 +517,7 @@ impl Runner {
     }
 
     async fn start(&mut self, id: &str, ui: &UiSink) {
-        if self.is_running(id) {
+        if self.processes.status(id) == ProcessStatus::Running {
             return;
         }
         let Some(port) = self.port else { return };
@@ -525,9 +530,7 @@ impl Runner {
             return;
         };
         match launch(&installed, port, &self.host, self.output.clone()) {
-            Ok(child) => {
-                self.running.insert(installed.id().to_owned(), child);
-            }
+            Ok(child) => self.processes.watch(installed.id(), child),
             Err(error) => {
                 ui.emit(UiEvent::Notice(format!("could not start {id}: {error}")));
             }
@@ -535,15 +538,7 @@ impl Runner {
     }
 
     async fn stop(&mut self, file_name: &str) {
-        if let Some(mut child) = self.running.remove(file_name) {
-            let _ = child.kill().await;
-        }
-    }
-
-    fn is_running(&mut self, file_name: &str) -> bool {
-        self.running
-            .get_mut(file_name)
-            .is_some_and(|child| matches!(child.try_wait(), Ok(None)))
+        self.processes.stop(file_name).await;
     }
 
     async fn publish(&mut self, ui: &UiSink) {
@@ -551,7 +546,7 @@ impl Runner {
         let states = installed
             .into_iter()
             .map(|e| InstalledState {
-                running: self.is_running(e.id()),
+                status: self.processes.status(e.id()),
                 kind: InstalledKind::of(&e),
                 id: e.id().to_owned(),
             })

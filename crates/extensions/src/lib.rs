@@ -1,6 +1,7 @@
 pub mod host;
 pub mod import;
 pub mod installer;
+pub mod processes;
 pub mod server;
 
 pub use host::{
@@ -12,4 +13,5 @@ pub use installer::{
     ExtensionOutput, InstallError, InstalledExtension, Installer, Package, Runtime, SingleFile,
     launch, program_available, resolve_program,
 };
+pub use processes::{Exit, ProcessStatus, Processes};
 pub use server::serve;

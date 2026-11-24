@@ -1,11 +1,13 @@
-use bobba::backend::{AutomaticStep, CatalogEvent, StoreInstall, UiEvent};
+use bobba::backend::{
+    AutomaticStep, CatalogEvent, InstalledKind, InstalledState, StoreInstall, UiEvent,
+};
 use bobba::logger::Logger;
 use bobba::scenes::SCENES;
 use bobba::setup::Step;
 use bobba::state::{App, Phase, SendResult, Tab};
 use bobba::store::{CatalogState, Showing};
 use bobba::view::root;
-use bobba_extensions::{Permission, PermissionRequest};
+use bobba_extensions::{ExtensionOutput, Permission, PermissionRequest, ProcessStatus};
 use bobba_protocol::Direction;
 use bobba_protocol::extension_message::ExtensionInfo;
 use bobba_session::{KeyRecoveryFailure, SessionEvent, TablesUnavailable};
@@ -548,6 +550,29 @@ fn an_unreachable_store_says_installed_extensions_keep_working() {
     assert!(shows_text(&rt, "keep working"));
     press(&mut rt, "store-retry");
     assert_eq!(rt.state.store.catalog, CatalogState::Loading);
+}
+
+#[test]
+fn an_extension_that_quits_on_its_own_says_why_and_can_start_again() {
+    let mut rt = runtime("extensions");
+    rt.update(|s, _| {
+        s.handle(UiEvent::ExtensionOutput(ExtensionOutput {
+            file_name: "presets_1.2.13".into(),
+            line: "Unable to locate a Java Runtime.".into(),
+        }));
+        s.handle(UiEvent::Installed(vec![InstalledState {
+            id: "presets_1.2.13".into(),
+            kind: InstalledKind::Package {
+                title: "Presets".into(),
+                version: "1.2.13".into(),
+            },
+            status: ProcessStatus::Exited { code: Some(1) },
+        }]));
+    });
+    settle(&mut rt);
+    assert!(shows_text(&rt, "exited · Unable to locate a Java Runtime."));
+    assert!(!shows_text(&rt, "starting"));
+    assert!(shown(&rt, "installed-start-presets_1.2.13"));
 }
 
 #[test]
