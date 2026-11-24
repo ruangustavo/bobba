@@ -20,6 +20,7 @@ Every G-Earth extension runs on Bobba unchanged: same extension protocol, same p
 
 - Flash/AIR client only. Unity and Nitro may come later; design for what exists today.
 - macOS and Windows. Most players are on Windows, and Windows is not yet tested: every OS-specific change covers both adapters and states what was not verified on Windows. Linux is out of scope.
+- Shared code assumes no OS. Anything that varies between OSes goes through `std` or a crate that handles it, not a literal or a shell command. That covers folders and path separators, executable names and how they are found (`java`/`java.exe`, `python3`/`py`), environment variables, line endings, filename case and process control. When nothing handles it, the code lives behind `cfg(target_os)` with an adapter for each OS.
 - Reference build: habbo.com.br, `MAC63-202611041140-63291706`.
 
 ## Sensitive data
