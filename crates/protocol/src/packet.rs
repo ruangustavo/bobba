@@ -7,7 +7,7 @@ pub struct Packet {
     frame: Bytes,
 }
 
-#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
 pub enum PacketError {
     #[error("frame has {0} bytes, a packet needs at least 6")]
     TooShort(usize),

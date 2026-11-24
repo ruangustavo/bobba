@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/protocol", "crates/session"]
+members = ["crates/protocol", "crates/session", "crates/extensions"]
 
 [workspace.package]
 edition = "2024"
@@ -16,3 +16,4 @@ tokio = { version = "1", features = ["full"] }
 futures = "0.3"
 tokio-util = "0.7"
 bobba-protocol = { path = "crates/protocol" }
+bobba-session = { path = "crates/session" }

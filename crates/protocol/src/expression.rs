@@ -15,7 +15,7 @@ pub enum Expression {
     },
 }
 
-#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
 pub enum ExpressionError {
     #[error("unterminated string starting at character {0}")]
     UnterminatedString(usize),
@@ -108,9 +108,6 @@ fn parse_named_header(chars: &[char]) -> Option<(Direction, String, usize)> {
 
 fn parse_body(chars: &[char], start: usize) -> Result<Vec<u8>, ExpressionError> {
     let mut out = Vec::new();
-    if start > 0 {
-        out.extend_from_slice(&[0xff, 0xff]);
-    }
     let mut pos = start;
     while pos < chars.len() {
         if chars[pos] == '{' {
@@ -411,7 +408,7 @@ mod tests {
             (*direction, identifier.as_str()),
             (Direction::ToServer, "Chat")
         );
-        assert_eq!(body.as_ref(), [0xff, 0xff, 0, 2, b'o', b'i', 0, 0, 0, 0]);
+        assert_eq!(body.as_ref(), [0, 2, b'o', b'i', 0, 0, 0, 0]);
     }
 
     #[test]

@@ -1,4 +1,9 @@
+use crate::expression::{HeaderLabel, expression_from_structure};
 use crate::packet::Packet;
+
+pub fn predicted_expression(packet: &Packet, label: HeaderLabel<'_>) -> String {
+    expression_from_structure(packet, &predict_structure(packet), label).unwrap_or_default()
+}
 
 pub fn predict_structure(packet: &Packet) -> String {
     let frame = Frame(packet.frame());

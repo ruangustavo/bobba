@@ -180,6 +180,7 @@ fn strip_message_suffix(name: &str) -> &str {
 mod tests {
     use super::*;
     use crate::expression::Expression;
+    use crate::packet::Packet;
 
     const SULEK: &str = r#"{"messages":{
         "incoming":[{"id":2350,"name":"ChatMessageEvent","confident":true},{"id":10,"name":"UsersEvent","confident":true}],
@@ -204,7 +205,7 @@ mod tests {
         let packet = Expression::parse("{out:Shout}{s:\"oi\"}{i:0}")
             .and_then(|e| e.resolve(&info()))
             .expect("Shout exists going out");
-        assert_eq!(packet.header_id(), 481);
+        assert_eq!(packet, Packet::builder(481).string("oi").i32(0).build());
     }
 
     #[test]

@@ -1,0 +1,12 @@
+[package]
+name = "bobba-extensions"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+bobba-protocol.workspace = true
+bobba-session.workspace = true
+bytes.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
