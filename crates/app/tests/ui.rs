@@ -581,6 +581,34 @@ fn a_connected_extension_with_a_window_offers_to_open_it() {
 }
 
 #[test]
+fn an_extension_row_offers_the_two_actions_of_its_state() {
+    let mut rt = runtime("extensions");
+    assert!(shown(&rt, "installed-close-antispam-48120.py"));
+    assert!(!shown(&rt, "installed-uninstall-antispam-48120.py"));
+    assert!(shown(&rt, "installed-restart-wired-helper-90314.jar"));
+    assert!(!shown(&rt, "installed-close-wired-helper-90314.jar"));
+
+    press(&mut rt, "installed-uninstall-wired-helper-90314.jar");
+    assert!(shown(&rt, "installed-confirm-wired-helper-90314.jar"));
+    rt.key(KeyEvent {
+        key: Key::Escape,
+        mods: Mods::default(),
+    });
+    settle(&mut rt);
+    assert!(!shown(&rt, "installed-confirm-wired-helper-90314.jar"));
+    assert!(shown(&rt, "installed-uninstall-wired-helper-90314.jar"));
+}
+
+#[test]
+fn an_available_update_leads_to_the_listing_in_the_store() {
+    let mut rt = runtime("store");
+    press(&mut rt, "extensions-showing/segment0");
+    press(&mut rt, "installed-update-Wired Helper_1.3.0");
+    assert_eq!(rt.state.store.showing, Showing::Store);
+    assert_eq!(rt.state.store.detail.as_deref(), Some("Wired Helper"));
+}
+
+#[test]
 fn an_extension_that_quits_on_its_own_says_why_and_can_start_again() {
     let mut rt = runtime("extensions");
     rt.update(|s, _| {
@@ -600,7 +628,7 @@ fn an_extension_that_quits_on_its_own_says_why_and_can_start_again() {
     settle(&mut rt);
     assert!(shows_text(&rt, "exited · Unable to locate a Java Runtime."));
     assert!(!shows_text(&rt, "starting"));
-    assert!(shown(&rt, "installed-start-presets_1.2.13"));
+    assert!(shown(&rt, "installed-restart-presets_1.2.13"));
 }
 
 #[test]

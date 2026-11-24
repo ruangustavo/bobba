@@ -25,5 +25,5 @@ pub fn poll(s: &mut App, clock: f64, tx: &mut Tx) -> bool {
 }
 
 pub fn on_key(s: &mut App, e: &KeyEvent, tx: &mut Tx) -> bool {
-    view::extensions::close_detail(s, e, tx)
+    view::extensions::close_detail(s, e, tx) || view::extensions::cancel_uninstall(s, e, tx)
 }
