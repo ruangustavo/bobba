@@ -235,6 +235,12 @@ impl App {
         changed
     }
 
+    pub fn open_extension(&self, id: ExtensionId) {
+        if let Some(backend) = &self.backend {
+            backend.host.double_click(id);
+        }
+    }
+
     pub fn start_extension(&mut self, id: String) {
         self.last_output.remove(&id);
         self.send(Command::StartExtension(id));

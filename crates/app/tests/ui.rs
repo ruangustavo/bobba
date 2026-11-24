@@ -9,7 +9,7 @@ use bobba::setup::Step;
 use bobba::state::{App, Phase, SendResult, Tab};
 use bobba::store::{CatalogState, Showing};
 use bobba::view::root;
-use bobba_extensions::{ExtensionOutput, Permission, PermissionRequest, ProcessStatus};
+use bobba_extensions::{ExtensionOutput, HostEvent, Permission, PermissionRequest, ProcessStatus};
 use bobba_protocol::Direction;
 use bobba_protocol::extension_message::ExtensionInfo;
 use bobba_session::{KeyRecoveryFailure, SessionEvent, TablesUnavailable};
@@ -552,6 +552,32 @@ fn an_unreachable_store_says_installed_extensions_keep_working() {
     assert!(shows_text(&rt, "keep working"));
     press(&mut rt, "store-retry");
     assert_eq!(rt.state.store.catalog, CatalogState::Loading);
+}
+
+#[test]
+fn a_connected_extension_with_a_window_offers_to_open_it() {
+    let mut rt = runtime("extensions");
+    assert!(!shown(&rt, "installed-open-antispam-48120.py"));
+    rt.update(|s, _| {
+        s.extensions.clear();
+        s.handle(UiEvent::Host(HostEvent::ExtensionConnected {
+            id: 7,
+            info: ExtensionInfo {
+                title: "AntiSpam".into(),
+                author: "ruan".into(),
+                version: "1.0".into(),
+                description: String::new(),
+                on_click_used: true,
+                file: Some("antispam-48120.py".into()),
+                cookie: None,
+                can_leave: true,
+                can_delete: true,
+            },
+        }));
+    });
+    settle(&mut rt);
+    assert!(shown(&rt, "installed-open-antispam-48120.py"));
+    press(&mut rt, "installed-open-antispam-48120.py");
 }
 
 #[test]

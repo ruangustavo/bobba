@@ -6,7 +6,7 @@ use rune_kit::{
     Badge, BadgeVariant, Button, ButtonVariant, ControlSize, IconButton, IconButtonVariant, Loader,
 };
 
-use bobba_extensions::ProcessStatus;
+use bobba_extensions::{ExtensionId, ProcessStatus};
 
 use crate::backend::{Command, InstalledKind};
 use crate::state::{App, GEarthOffer};
@@ -152,6 +152,17 @@ fn item(p: &Paint, key: String, title: String, detail: String, badge: El, action
         .children(actions)
 }
 
+fn open_button(id: ExtensionId, title: &str, key: String) -> El {
+    IconButton::new(&PLAY)
+        .variant(IconButtonVariant::Ghost)
+        .control_size(ControlSize::Large)
+        .label(format!("Open {title}"))
+        .help(format!("Open {title}'s window"))
+        .on_press(move |s: &mut App| s.open_extension(id))
+        .build(&paint().kit)
+        .key(key)
+}
+
 fn badge(label: &str, variant: BadgeVariant) -> El {
     Badge::new(label).variant(variant).build(&paint().kit)
 }
@@ -286,13 +297,21 @@ pub fn view(s: &App) -> El {
             }
             InstalledKind::Single(_) => None,
         };
+        let open = connected
+            .filter(|(_, info)| info.on_click_used)
+            .map(|(id, info)| {
+                open_button(*id, &info.title, format!("installed-open-{}", state.id))
+            });
         items.push(item(
             p,
             format!("installed-{}", state.id),
             title,
             detail,
             dot(status_color),
-            update.into_iter().chain([toggle, uninstall]).collect(),
+            open.into_iter()
+                .chain(update)
+                .chain([toggle, uninstall])
+                .collect(),
         ));
     }
     let empty = s.installed.is_empty() && !s.extensions.iter().any(|(_, info)| info.file.is_none());
@@ -317,7 +336,7 @@ pub fn view(s: &App) -> El {
             ],
         ));
     }
-    for (_, info) in s.extensions.iter().filter(|(_, info)| info.file.is_none()) {
+    for (id, info) in s.extensions.iter().filter(|(_, info)| info.file.is_none()) {
         items.push(item(
             p,
             format!("manual-{}", info.title),
@@ -327,7 +346,10 @@ pub fn view(s: &App) -> El {
                 info.author, info.version
             ),
             dot(p.green),
-            vec![],
+            info.on_click_used
+                .then(|| open_button(*id, &info.title, format!("manual-open-{}", info.title)))
+                .into_iter()
+                .collect(),
         ));
     }
     let list = items.into_iter().enumerate().fold(
