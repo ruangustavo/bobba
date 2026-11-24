@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 bobba-extensions.workspace = true
+bobba-intercept.workspace = true
 bobba-protocol.workspace = true
 bobba-session.workspace = true
 bobba-sulek.workspace = true

@@ -7,6 +7,7 @@ use bobba_protocol::extension_message::ExtensionInfo;
 use bobba_protocol::{Direction, PacketInfo};
 use bobba_session::{ConnectionInfo, LogEntry, SessionEvent, Upstream};
 use gpui_kit::TestSupportExt as _;
+use gpui_kit::component::Selectable as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::tab::{Tab, TabBar};
@@ -16,7 +17,7 @@ use gpui_kit::component::{
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use crate::backend::{Backend, Command, DirectTarget, InstalledState, UiEvent};
+use crate::backend::{AutomaticStep, Backend, Command, DirectTarget, InstalledState, UiEvent};
 use crate::injection::{INJECTION_NAME, InjectionPanel};
 use crate::logger::{LoggerEvent, LoggerPanel};
 
@@ -62,6 +63,12 @@ pub enum ConnectionStatus {
     Failed(String),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectionMode {
+    Automatic,
+    Manual,
+}
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct Traffic {
     pub to_server: u64,
@@ -72,6 +79,8 @@ pub struct BobbaApp {
     backend: Backend,
     tab: AppTab,
     status: ConnectionStatus,
+    mode: ConnectionMode,
+    automatic: Option<AutomaticStep>,
     packet_info: Option<Arc<PacketInfo>>,
     traffic: Traffic,
     encrypted: bool,
@@ -131,6 +140,8 @@ impl BobbaApp {
             backend,
             tab: AppTab::Connection,
             status: ConnectionStatus::Idle,
+            mode: ConnectionMode::Automatic,
+            automatic: None,
             packet_info: None,
             traffic: Traffic::default(),
             encrypted: false,
@@ -179,6 +190,7 @@ impl BobbaApp {
             UiEvent::ExtensionPort(port) => self.extension_port = Some(port),
             UiEvent::Listening(address) => self.status = ConnectionStatus::Listening(address),
             UiEvent::Session(SessionEvent::Connected(info)) => {
+                self.automatic = None;
                 self.status = ConnectionStatus::Connected(info);
                 self.traffic = Traffic::default();
             }
@@ -211,6 +223,12 @@ impl BobbaApp {
                 self.log_console(format!("[{}] {}", output.file_name, output.line))
             }
             UiEvent::Notice(text) => self.log_console(text),
+            UiEvent::Automatic(step) => {
+                if let AutomaticStep::Failed(reason) = &step {
+                    self.status = ConnectionStatus::Failed(reason.clone());
+                }
+                self.automatic = Some(step);
+            }
             UiEvent::Failed(reason) => self.status = ConnectionStatus::Failed(reason),
         }
         cx.notify();
@@ -286,6 +304,7 @@ impl BobbaApp {
                 host: hotel_host,
                 port: hotel_port,
             },
+            tables: None,
         }));
         self.status = ConnectionStatus::Idle;
         cx.notify();
@@ -311,6 +330,7 @@ impl BobbaApp {
 
     fn abort(&mut self, cx: &mut Context<Self>) {
         self.backend.send(Command::Abort);
+        self.automatic = None;
         self.status = ConnectionStatus::Idle;
         cx.notify();
     }
@@ -418,6 +438,113 @@ impl BobbaApp {
     }
 
     fn render_connection(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let mode_button = |mode: ConnectionMode, id: &'static str, label: &'static str| {
+            Button::new(id)
+                .label(label)
+                .small()
+                .selected(self.mode == mode)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.mode = mode;
+                    cx.notify();
+                }))
+        };
+        v_flex()
+            .child(
+                h_flex()
+                    .px_4()
+                    .pt_4()
+                    .gap_2()
+                    .child(mode_button(
+                        ConnectionMode::Automatic,
+                        "mode-automatic",
+                        "Habbo AIR client",
+                    ))
+                    .child(mode_button(
+                        ConnectionMode::Manual,
+                        "mode-manual",
+                        "Manual host and port",
+                    )),
+            )
+            .child(match self.mode {
+                ConnectionMode::Automatic => self.render_automatic(cx).into_any_element(),
+                ConnectionMode::Manual => self.render_manual(cx).into_any_element(),
+            })
+    }
+
+    fn render_automatic(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let busy = matches!(self.status, ConnectionStatus::Connected(_))
+            || matches!(
+                self.automatic,
+                Some(AutomaticStep::Working(_) | AutomaticStep::WaitingForClient(_))
+            );
+        let muted = cx.theme().muted_foreground;
+        let step = match &self.automatic {
+            None if matches!(self.status, ConnectionStatus::Connected(_)) => self.status_text(),
+            None => "Click Connect, then open Habbo from the Habbo Launcher.".to_owned(),
+            Some(AutomaticStep::Working(text)) => text.clone(),
+            Some(AutomaticStep::WaitingForClient(hotels)) => {
+                format!("Now open Habbo from the Habbo Launcher. Waiting on {hotels} hotels…")
+            }
+            Some(AutomaticStep::NeedsPreparation(_)) => {
+                "Habbo.app must be re-signed once so G-MemZ can read its encryption key.".to_owned()
+            }
+            Some(AutomaticStep::Prepared(original)) => {
+                format!(
+                    "Habbo.app is ready. The original is kept at {}. Connect again.",
+                    original.display()
+                )
+            }
+            Some(AutomaticStep::Failed(reason)) => reason.clone(),
+        };
+        let prepare = match &self.automatic {
+            Some(AutomaticStep::NeedsPreparation(app)) => {
+                let app = app.clone();
+                Some(
+                    Button::new("prepare-client")
+                        .label("Re-sign Habbo.app")
+                        .primary()
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.backend.send(Command::PrepareClient(app.clone()));
+                            cx.notify();
+                        })),
+                )
+            }
+            _ => None,
+        };
+        v_flex()
+            .p_4()
+            .gap_4()
+            .child(
+                h_flex()
+                    .gap_3()
+                    .items_center()
+                    .child(if busy {
+                        Button::new("abort")
+                            .label("Abort")
+                            .danger()
+                            .on_click(cx.listener(|this, _, _, cx| this.abort(cx)))
+                    } else {
+                        Button::new("connect-automatic")
+                            .label("Connect")
+                            .primary()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.status = ConnectionStatus::Idle;
+                                this.automatic = Some(AutomaticStep::Working("Starting".into()));
+                                this.backend.send(Command::ConnectAutomatically);
+                                cx.notify();
+                            }))
+                    })
+                    .children(prepare),
+            )
+            .child(div().id("automatic-step").test_support().text_sm().child(step))
+            .child(
+                div().text_xs().text_color(muted).child(
+                    "Bobba points the Habbo game servers at itself while the client connects (one administrator prompt), then removes the redirect.",
+                ),
+            )
+    }
+
+    fn render_manual(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let connected = matches!(
             self.status,
             ConnectionStatus::Connected(_) | ConnectionStatus::Listening(_)

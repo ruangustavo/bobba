@@ -8,8 +8,13 @@ use bobba_extensions::{
     ExtensionHost, ExtensionOutput, HostConfig, HostEvent, Installer, PermissionRequest, Runtime,
     launch, serve,
 };
+use bobba_intercept::client::{self, ClientState};
+use bobba_intercept::{HOTEL_HOSTS, HostsRedirect, HotelListeners, gmemz, resolve_hotels};
 use bobba_protocol::extension_message::HostInfo;
-use bobba_session::{DirectProxy, LogEntry, SessionEvent, SessionHandle, Upstream};
+use bobba_session::{
+    DirectProxy, DumpFile, GMemZ, LogEntry, NoTables, SessionEvent, SessionHandle, TableSource,
+    Upstream,
+};
 use bobba_sulek::Sulek;
 use tokio::net::TcpListener;
 use tokio::process::Child;
@@ -27,6 +32,7 @@ const INTERCEPT_TIMEOUT: Duration = Duration::from_secs(3);
 pub struct DirectTarget {
     pub listen_port: u16,
     pub hotel: Upstream,
+    pub tables: Option<PathBuf>,
 }
 
 impl DirectTarget {
@@ -44,9 +50,11 @@ impl DirectTarget {
         let listen_port = value("--listen")
             .and_then(|p| p.parse().ok())
             .unwrap_or(30000);
+        let tables = value("--rc4-dump").map(PathBuf::from);
         Some(Self {
             listen_port,
             hotel: Upstream { host, port: port? },
+            tables,
         })
     }
 }
@@ -54,11 +62,22 @@ impl DirectTarget {
 #[derive(Debug)]
 pub enum Command {
     Connect(DirectTarget),
+    ConnectAutomatically,
+    PrepareClient(PathBuf),
     Abort,
     InstallExtension(PathBuf),
     StartExtension(String),
     StopExtension(String),
     UninstallExtension(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AutomaticStep {
+    Working(String),
+    NeedsPreparation(PathBuf),
+    Prepared(PathBuf),
+    WaitingForClient(usize),
+    Failed(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,6 +98,7 @@ pub enum UiEvent {
     Installed(Vec<InstalledState>),
     ExtensionOutput(ExtensionOutput),
     Notice(String),
+    Automatic(AutomaticStep),
     Failed(String),
 }
 
@@ -217,6 +237,18 @@ async fn run(
                 }
                 pending = Some(tokio::spawn(connect(target, host.clone(), ui.clone())));
             }
+            Command::ConnectAutomatically => {
+                if let Some(task) = pending.take() {
+                    task.abort();
+                }
+                pending = Some(tokio::spawn(connect_automatically(
+                    host.clone(),
+                    ui.clone(),
+                )));
+            }
+            Command::PrepareClient(app) => {
+                tokio::spawn(prepare_client(app, ui.clone()));
+            }
             Command::InstallExtension(path) => match runner.installer.install(&path) {
                 Ok(installed) => runner.start(&installed.file_name, &ui).await,
                 Err(error) => {
@@ -332,10 +364,115 @@ async fn connect(target: DirectTarget, host: Arc<Host>, ui: smol::channel::Sende
         }
     };
     drop(proxy);
+    let tables: Arc<dyn TableSource> = match target.tables {
+        Some(path) => Arc::new(DumpFile { path }),
+        None => Arc::new(NoTables),
+    };
+    run_session(session, host, tables, ui).await;
+}
+
+async fn connect_automatically(host: Arc<Host>, ui: smol::channel::Sender<UiEvent>) {
+    let step = |text: &str| UiEvent::Automatic(AutomaticStep::Working(text.to_owned()));
+    let fail = |text: String| UiEvent::Automatic(AutomaticStep::Failed(text));
+    let _ = ui
+        .send(step(
+            "Checking G-MemZ, which reads the encryption key from Habbo",
+        ))
+        .await;
+    let gmemz = gmemz::default_path();
+    if let Err(error) = gmemz::ensure_installed(&gmemz).await {
+        let _ = ui.send(fail(error.to_string())).await;
+        return;
+    }
+    let _ = ui.send(step("Checking the Habbo client")).await;
+    match client::client_state().await {
+        ClientState::Ready(_) => {}
+        ClientState::NotInstalled => {
+            let _ = ui
+                .send(fail(
+                    "Install the Habbo Launcher and open Habbo once, then try again".into(),
+                ))
+                .await;
+            return;
+        }
+        ClientState::NeedsPreparation(app) => {
+            let _ = ui
+                .send(UiEvent::Automatic(AutomaticStep::NeedsPreparation(app)))
+                .await;
+            return;
+        }
+    }
+    let _ = ui.send(step("Finding the hotels")).await;
+    let redirects = resolve_hotels(&HOTEL_HOSTS).await;
+    if redirects.is_empty() {
+        let _ = ui
+            .send(fail(
+                "Could not resolve any Habbo game server; check your internet".into(),
+            ))
+            .await;
+        return;
+    }
+    let _ = ui
+        .send(step(
+            "Approve the administrator prompt so Bobba can redirect the hotels",
+        ))
+        .await;
+    let redirect = match HostsRedirect::apply(&redirects).await {
+        Ok(redirect) => redirect,
+        Err(error) => {
+            let _ = ui.send(fail(error.to_string())).await;
+            return;
+        }
+    };
+    let listeners = match HotelListeners::bind(&redirects).await {
+        Ok(listeners) => listeners,
+        Err(error) => {
+            redirect.remove().await;
+            let _ = ui
+                .send(fail(format!("could not listen for the client: {error}")))
+                .await;
+            return;
+        }
+    };
+    let _ = ui
+        .send(UiEvent::Automatic(AutomaticStep::WaitingForClient(
+            redirects.len(),
+        )))
+        .await;
+    let accepted = listeners.accept_first().await;
+    redirect.remove().await;
+    let session = match accepted {
+        Ok((session, _)) => session,
+        Err(error) => {
+            let _ = ui.send(fail(format!("hotel unreachable: {error}"))).await;
+            return;
+        }
+    };
+    run_session(session, host, Arc::new(GMemZ { binary: gmemz }), ui).await;
+}
+
+async fn prepare_client(app: PathBuf, ui: smol::channel::Sender<UiEvent>) {
+    let _ = ui
+        .send(UiEvent::Automatic(AutomaticStep::Working(
+            "Re-signing Habbo.app".into(),
+        )))
+        .await;
+    let event = match client::prepare(&app).await {
+        Ok(original) => UiEvent::Automatic(AutomaticStep::Prepared(original)),
+        Err(error) => UiEvent::Automatic(AutomaticStep::Failed(error.to_string())),
+    };
+    let _ = ui.send(event).await;
+}
+
+async fn run_session(
+    session: bobba_session::Session,
+    host: Arc<Host>,
+    tables: Arc<dyn TableSource>,
+    ui: smol::channel::Sender<UiEvent>,
+) {
     let (session_events, mut session_events_rx) = mpsc::unbounded_channel();
     let (log, mut log_rx) = mpsc::channel(LOG_CHANNEL_CAPACITY);
-    let (handle, finished) =
-        session.start(host, Arc::new(bobba_session::NoTables), session_events, log);
+    let (handle, finished) = session.start(host, tables, session_events, log);
     let abort_on_drop = AbortOnDrop(handle);
     let mut ticker = tokio::time::interval(LOG_BATCH_INTERVAL);
     let mut batch = Vec::new();

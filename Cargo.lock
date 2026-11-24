@@ -704,6 +704,7 @@ name = "bobba"
 version = "0.1.0"
 dependencies = [
  "bobba-extensions",
+ "bobba-intercept",
  "bobba-protocol",
  "bobba-session",
  "bobba-sulek",
@@ -723,6 +724,19 @@ dependencies = [
  "bytes",
  "dirs 6.0.0",
  "getrandom 0.3.4",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+]
+
+[[package]]
+name = "bobba-intercept"
+version = "0.1.0"
+dependencies = [
+ "bobba-session",
+ "dirs 6.0.0",
+ "reqwest",
+ "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",

@@ -80,6 +80,22 @@ pub struct Session {
     upstream: Upstream,
 }
 
+impl Session {
+    pub fn from_streams(
+        client: TcpStream,
+        server: TcpStream,
+        upstream: Upstream,
+    ) -> io::Result<Self> {
+        client.set_nodelay(true)?;
+        server.set_nodelay(true)?;
+        Ok(Self {
+            client,
+            server,
+            upstream,
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SessionEvent {
     Connected(ConnectionInfo),

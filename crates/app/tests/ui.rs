@@ -176,3 +176,28 @@ fn permission_banner_asks_and_answers_the_extension(cx: &mut TestAppContext) {
     .expect("window alive");
     assert_eq!(answer.try_recv(), Ok(Permission::Allow));
 }
+
+#[gpui_kit::test]
+fn automatic_mode_offers_to_prepare_the_client_and_manual_mode_shows_fields(
+    cx: &mut TestAppContext,
+) {
+    let (window, app) = open_app(cx);
+    send_events(
+        cx,
+        window,
+        &app,
+        vec![UiEvent::Automatic(
+            bobba::backend::AutomaticStep::NeedsPreparation("/Applications/Habbo.app".into()),
+        )],
+    );
+    cx.update_window(window.into(), |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.find("prepare-client").visible());
+        assert!(window.find("automatic-step").visible());
+        assert!(window.try_find("hotel-host").is_none());
+        window.click("mode-manual", cx);
+        window.render_frame(cx);
+        assert!(window.find("hotel-host").visible());
+    })
+    .expect("window alive");
+}

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/protocol", "crates/session", "crates/extensions", "crates/sulek", "crates/app"]
+members = ["crates/protocol", "crates/session", "crates/extensions", "crates/sulek", "crates/app", "crates/intercept"]
 
 [workspace.package]
 edition = "2024"
@@ -22,6 +22,8 @@ rayon = "1"
 tempfile = "3"
 bobba-extensions = { path = "crates/extensions" }
 bobba-sulek = { path = "crates/sulek" }
+bobba-intercept = { path = "crates/intercept" }
+sha2 = "0.10"
 gpui-kit = "0.11"
 smol = "2"
 bobba-protocol = { path = "crates/protocol" }
