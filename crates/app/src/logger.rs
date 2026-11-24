@@ -4,7 +4,7 @@ use crate::log_feed::LogFeed;
 use crate::packet_log::{Directions, Filter, LogRow};
 use crate::view::chrome::TITLEBAR_HEIGHT;
 
-const WINDOW: (f32, f32) = (1180.0, 760.0);
+const WINDOW: (f32, f32) = (840.0, 580.0);
 pub const LIST: &str = "packets";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

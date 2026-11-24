@@ -23,6 +23,10 @@ static SLIDERS: Icon = Icon {
 
 const SHEET: f32 = 420.0;
 const LINE: f32 = 36.0;
+const LINE_CHARS: usize = 300;
+const SHEET_CHARS: usize = 360;
+const STATUS_WIDTH: f32 = 240.0;
+const FIELDS: usize = 200;
 const ENTER: SpringPair = SpringPair::new(Spring::new(0.25, 0.0), Spring::new(0.2, 0.0));
 
 fn outcome_color(p: &Paint, row: &LogRow) -> Color {
@@ -68,6 +72,28 @@ fn expression(s: &Logger, row: &LogRow) -> String {
     expression_for(row.packet(), row.direction(), s.feed.log().packet_info())
 }
 
+fn start_of(expression: &str, chars: usize) -> Option<String> {
+    let (cut, _) = expression.char_indices().nth(chars)?;
+    Some(format!("{}…", &expression[..cut]))
+}
+
+fn one_line(expression: &str) -> String {
+    let start = start_of(expression, LINE_CHARS).unwrap_or_else(|| expression.to_owned());
+    start.replace('\n', "↵")
+}
+
+fn grouped(n: usize) -> String {
+    let digits = n.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (i, digit) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(digit);
+    }
+    out
+}
+
 fn line(s: &Logger, index: usize) -> El {
     let p = paint();
     let k = &p.kit;
@@ -99,7 +125,7 @@ fn line(s: &Logger, index: usize) -> El {
                 .color(direction_color(p, entry.direction())),
         )
         .child(
-            text(expression)
+            text(one_line(&expression))
                 .grow(1.0)
                 .shrink()
                 .font(k.ty.mono)
@@ -107,9 +133,12 @@ fn line(s: &Logger, index: usize) -> El {
                 .truncate(),
         )
         .children((!status.is_empty()).then(|| {
-            text(status)
+            text(status.clone())
+                .max_w(STATUS_WIDTH)
                 .font(k.ty.text_xsmall_medium)
                 .color(outcome_color(p, &entry))
+                .truncate()
+                .help_when_truncated(status)
         }))
         .on_press(move |s: &mut Logger| s.open(number))
         .on_double_press(move |s: &mut Logger| s.use_in_injection(inject.clone()))
@@ -157,13 +186,23 @@ fn swatch(p: &Paint, direction: Direction) -> El {
 fn view_menu(s: &Logger, layer: &mut Vec<El>) -> El {
     let p = paint();
     let k = &p.kit;
-    let trigger = Button::new(summary(s))
+    let label = summary(s);
+    let trigger = Button::new(label.clone())
         .icon(&SLIDERS)
         .variant(ButtonVariant::GhostMuted)
+        .label_with(move |font, ink| {
+            text(label.clone())
+                .font(font)
+                .color(ink)
+                .truncate()
+                .help_when_truncated(label)
+        })
         .expanded(s.view_open)
         .on_press(|s: &mut Logger| s.view_open = !s.view_open)
         .build(k)
-        .key("logger-view");
+        .key("logger-view")
+        .shrink()
+        .min_w(0.0);
     Menu::new("logger-view")
         .trigger(trigger)
         .open(s.view_open)
@@ -195,15 +234,17 @@ fn view_menu(s: &Logger, layer: &mut Vec<El>) -> El {
                 .on_select(|s: &mut Logger| s.feed.toggle_pause()),
         )
         .build(k, layer)
+        .shrink()
+        .min_w(0.0)
 }
 
 fn toolbar(s: &Logger, cx: &mut Cx<Logger>, layer: &mut Vec<El>) -> El {
     let k = &paint().kit;
     let log = s.feed.log();
-    let count = if log.len() == log.total() {
-        format!("{} packets", log.total())
-    } else {
-        format!("{} of {}", log.len(), log.total())
+    let count = match (log.len(), log.total()) {
+        (1, 1) => "1 packet".to_owned(),
+        (shown, total) if shown == total => format!("{} packets", grouped(total)),
+        (shown, total) => format!("{} of {}", grouped(shown), grouped(total)),
     };
     drop(log);
     row()
@@ -225,7 +266,9 @@ fn toolbar(s: &Logger, cx: &mut Cx<Logger>, layer: &mut Vec<El>) -> El {
                 .on_edit(|s: &mut Logger| &mut s.filter)
                 .on_change(|s: &mut Logger, _| s.set_filter())
                 .build(k)
-                .key("logger-filter"),
+                .key("logger-filter")
+                .shrink()
+                .min_w(180.0),
         )
         .child(view_menu(s, layer))
         .child(el().grow(1.0))
@@ -256,7 +299,8 @@ fn structure(p: &Paint, entry: &LogRow) -> El {
     if fields.is_empty() {
         return text("No values").font(k.ty.small).color(k.c.text_faint);
     }
-    fields.into_iter().enumerate().fold(
+    let rest = fields.len().saturating_sub(FIELDS);
+    let list = fields.into_iter().take(FIELDS).enumerate().fold(
         col().key("sheet-structure").w_full().gap(2.0),
         |list, (i, field)| {
             list.child(
@@ -291,7 +335,16 @@ fn structure(p: &Paint, entry: &LogRow) -> El {
                     ),
             )
         },
-    )
+    );
+    list.children((rest > 0).then(|| {
+        text(match rest {
+            1 => "1 more field".to_owned(),
+            _ => format!("{} more fields", grouped(rest)),
+        })
+        .key("sheet-more-fields")
+        .font(k.ty.small)
+        .color(k.c.text_faint)
+    }))
 }
 
 fn sheet(s: &Logger, entry: &LogRow, copied: bool) -> El {
@@ -329,6 +382,7 @@ fn sheet(s: &Logger, entry: &LogRow, copied: bool) -> El {
                 )
                 .child(
                     row()
+                        .w_full()
                         .gap(6.0)
                         .child(
                             text(heading(entry.direction()))
@@ -339,6 +393,8 @@ fn sheet(s: &Logger, entry: &LogRow, copied: bool) -> El {
                             text(format!("· {status}"))
                                 .font(k.ty.small)
                                 .color(outcome_color(p, entry))
+                                .truncate()
+                                .help_when_truncated(status.clone())
                         })),
                 ),
         )
@@ -367,13 +423,24 @@ fn sheet(s: &Logger, entry: &LogRow, copied: bool) -> El {
                 .fill(k.c.bg_base)
                 .border(1.0, p.hairline)
                 .child(
-                    text(expression)
+                    text(start_of(&expression, SHEET_CHARS).unwrap_or_else(|| expression.clone()))
                         .font(k.ty.mono)
                         .color(k.c.text_base)
                         .selectable(true)
                         .wrap_anywhere(),
                 ),
         )
+        .children(start_of(&expression, SHEET_CHARS).map(|_| {
+            text(format!(
+                "Showing the start of {} characters. Copy and Use in Injection take the whole packet.",
+                grouped(expression.chars().count())
+            ))
+            .key("sheet-cut")
+            .w_full()
+            .font(k.ty.small)
+            .color(k.c.text_faint)
+            .wrap()
+        }))
         .child(
             row()
                 .w_full()
@@ -396,14 +463,14 @@ fn sheet(s: &Logger, entry: &LogRow, copied: bool) -> El {
                 ),
         )
         .child(el().h(4.0))
-        .child(label(p, "STRUCTURE"))
+        .child(label(p, "Structure"))
         .child(structure(p, entry));
     if let Some(sent) = sent {
         body = body
             .child(el().h(4.0))
-            .child(label(p, "SENT INSTEAD"))
+            .child(label(p, "Sent instead"))
             .child(
-                text(sent)
+                text(start_of(&sent, SHEET_CHARS).unwrap_or(sent))
                     .key("sheet-sent")
                     .font(k.ty.mono)
                     .color(k.c.text_muted)
@@ -434,11 +501,58 @@ fn sheet(s: &Logger, entry: &LogRow, copied: bool) -> El {
         )
 }
 
+fn empty(s: &Logger) -> Option<El> {
+    let log = s.feed.log();
+    if !log.is_empty() {
+        return None;
+    }
+    let (title, detail) = if log.total() == 0 {
+        (
+            "No packets yet",
+            "Packets show here as soon as Habbo talks to the hotel.",
+        )
+    } else {
+        (
+            "No packets match",
+            "Change the filter or show both directions in View.",
+        )
+    };
+    let k = &paint().kit;
+    Some(
+        col()
+            .key("logger-empty")
+            .w_full()
+            .h_full()
+            .center()
+            .gap(4.0)
+            .px(24.0)
+            .child(text(title).font(k.ty.ui_medium).color(k.c.text_base))
+            .child(
+                text(detail)
+                    .font(k.ty.small)
+                    .color(k.c.text_muted)
+                    .align(Align::Center)
+                    .wrap(),
+            ),
+    )
+}
+
 pub fn body(s: &Logger) -> El {
     let opened = s
         .sheet
         .and_then(|open| s.opened_row().map(|entry| sheet(s, &entry, open.copied)));
-    let list = col()
+    let list = empty(s).unwrap_or_else(|| list(s));
+    row()
+        .key("logger-body")
+        .w_full()
+        .grow(1.0)
+        .min_h(0.0)
+        .child(col().grow(1.0).shrink().h_full().min_h(0.0).child(list))
+        .children(opened)
+}
+
+fn list(s: &Logger) -> El {
+    col()
         .key(LIST)
         .w_full()
         .h_full()
@@ -461,14 +575,7 @@ pub fn body(s: &Logger) -> El {
                     },
                     line,
                 ),
-        );
-    row()
-        .key("logger-body")
-        .w_full()
-        .grow(1.0)
-        .min_h(0.0)
-        .child(col().grow(1.0).shrink().h_full().min_h(0.0).child(list))
-        .children(opened)
+        )
 }
 
 pub fn root(s: &Logger, cx: &mut Cx<Logger>) -> El {

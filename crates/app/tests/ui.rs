@@ -3,8 +3,9 @@ use std::collections::HashSet;
 use bobba::backend::{
     AutomaticStep, CatalogEvent, InstalledKind, InstalledState, StoreInstall, UiEvent,
 };
+use bobba::log_feed::LogFeed;
 use bobba::logger::Logger;
-use bobba::scenes::{BREAKS, SCENES};
+use bobba::scenes::{BREAKS, LOGGER_BREAKS, LOGGER_SCENES, SCENES};
 use bobba::setup::Step;
 use bobba::state::{App, Phase, SendResult, Tab};
 use bobba::store::CatalogState;
@@ -1001,5 +1002,174 @@ fn store_categories_are_tabs_under_the_search() {
     assert!(
         tab[1] >= search[1] + search[3],
         "the tabs sit under the search"
+    );
+}
+
+const LOGGER_SIZE: (f32, f32) = (840.0, 580.0);
+const LOGGER_MIN_SIZE: (f32, f32) = (720.0, 420.0);
+
+fn logger_break_at(case: &str, size: (f32, f32)) -> Runtime<Logger> {
+    let mut logger = Logger::new(LogFeed::new());
+    for (_, scene) in LOGGER_SCENES {
+        scene(&mut logger);
+    }
+    if case != "Demo data" {
+        let Some((_, _, apply)) = LOGGER_BREAKS.iter().find(|(_, name, _)| *name == case) else {
+            panic!("{case} is not in LOGGER_BREAKS");
+        };
+        apply(&mut logger);
+    }
+    let mut rt = Runtime::new(logger, bobba::view::logger::root, size, Env::new(true, 2.0));
+    rt.on_key = Some(bobba::logger::on_key);
+    rt.frame(0.0);
+    settle(&mut rt);
+    rt
+}
+
+fn inside(inner: [f32; 4], outer: [f32; 4]) -> bool {
+    inner[0] >= outer[0] - 0.5
+        && inner[1] >= outer[1] - 0.5
+        && inner[0] + inner[2] <= outer[0] + outer[2] + 0.5
+        && inner[1] + inner[3] <= outer[1] + outer[3] + 0.5
+}
+
+fn fits_in_its_parent<S: 'static>(rt: &Runtime<S>, wanted: &str) -> bool {
+    let all = rt.elements();
+    let matches: Vec<_> = all
+        .iter()
+        .filter(|e| !e.exiting && e.text.as_deref().is_some_and(|t| t.contains(wanted)))
+        .collect();
+    !matches.is_empty()
+        && matches.iter().all(|e| {
+            e.parent
+                .and_then(|p| all.get(p))
+                .is_some_and(|parent| inside(e.rect, parent.rect))
+        })
+}
+
+#[test]
+fn a_huge_packet_keeps_the_sheet_actions_on_screen() {
+    for case in ["Open: floor plan", "Open: 600 furni"] {
+        let rt = logger_break_at(case, LOGGER_SIZE);
+        let window = [0.0, 0.0, LOGGER_SIZE.0, LOGGER_SIZE.1];
+        for key in ["logger-use", "logger-copy"] {
+            assert!(inside(rect_of(&rt, key), window), "{case}: {key}");
+        }
+    }
+}
+
+#[test]
+fn a_huge_packet_draws_only_what_fits_and_says_how_much_is_left() {
+    let rt = logger_break_at("Open: 600 furni", LOGGER_SIZE);
+    let elements = rt.elements();
+    assert!(elements.len() < 2_000, "{} elements", elements.len());
+    let longest = elements
+        .iter()
+        .filter_map(|e| e.text.as_ref().map(String::len))
+        .max()
+        .unwrap_or_default();
+    assert!(longest < 5_000, "a text of {longest} bytes");
+    assert!(shows_text(&rt, "7,612 more fields"));
+}
+
+#[test]
+fn a_huge_packet_goes_to_injection_whole() {
+    let mut rt = logger_break_at("Open: 600 furni", LOGGER_SIZE);
+    press(&mut rt, "logger-use");
+    let sent = rt.state.feed.take_injection().unwrap_or_default();
+    assert_eq!(sent.len(), 51_112);
+}
+
+#[test]
+fn every_view_toggle_keeps_the_count_and_clear_in_the_window() {
+    let rt = logger_break_at("Every toggle on", LOGGER_MIN_SIZE);
+    let window = [0.0, 0.0, LOGGER_MIN_SIZE.0, LOGGER_MIN_SIZE.1];
+    for key in ["logger-count", "logger-clear"] {
+        assert!(inside(rect_of(&rt, key), window), "{key}");
+    }
+    assert_eq!(text_of(&rt, "logger-count"), "99,999 of 100,000");
+}
+
+#[test]
+fn one_packet_is_counted_in_the_singular() {
+    let rt = logger_break_at("One", LOGGER_SIZE);
+    assert_eq!(text_of(&rt, "logger-count"), "1 packet");
+}
+
+#[test]
+fn a_long_extension_name_in_a_status_stays_in_its_row_and_shows_on_hover() {
+    let status = "Copiador de Roupas Automático para Quartos Lotados";
+    for (case, size) in [
+        ("Worst case", LOGGER_SIZE),
+        ("Open: floor plan", LOGGER_MIN_SIZE),
+        ("Open: edited, long title", LOGGER_SIZE),
+    ] {
+        let rt = logger_break_at(case, size);
+        assert!(fits_in_its_parent(&rt, status), "{case}");
+        assert!(helps(&rt, status), "{case}");
+    }
+    let rt = logger_break_at("Worst case", LOGGER_SIZE);
+    assert!(shows_text(&rt, "{out:Chat}{s:\"alguém quer trocar"));
+}
+
+#[test]
+fn a_line_break_in_a_string_keeps_its_packet_on_one_line() {
+    let rt = logger_break_at("Worst case", LOGGER_SIZE);
+    assert!(shows_text(&rt, "Priya: line one"));
+    assert!(!rt.elements().iter().any(|e| {
+        e.text
+            .as_deref()
+            .is_some_and(|t| t.contains("line one") && t.contains('\n'))
+    }));
+}
+
+#[test]
+fn strings_from_the_client_read_as_utf8() {
+    let rt = logger_break_at("Worst case", LOGGER_SIZE);
+    assert!(shows_text(&rt, "王秀英: 你好"));
+    assert!(shows_text(&rt, "نور الهدى"));
+    let rt = logger_break_at("Demo data", LOGGER_SIZE);
+    assert!(shows_text(&rt, "alguém aí?"));
+}
+
+#[test]
+fn an_empty_log_says_whether_nothing_came_or_the_filter_hides_it() {
+    let rt = logger_break_at("Empty", LOGGER_SIZE);
+    assert!(shows_text(&rt, "No packets yet"));
+    let mut rt = logger_break_at("Every toggle on", LOGGER_SIZE);
+    rt.update(|s, _| {
+        s.filter = rune::TextEdit::new("zzz");
+        s.set_filter();
+    });
+    settle(&mut rt);
+    assert!(shows_text(&rt, "No packets match"));
+}
+
+#[test]
+fn a_long_view_summary_stays_clear_of_the_count() {
+    let rt = logger_break_at("Every toggle on", LOGGER_MIN_SIZE);
+    let summary = rt
+        .elements()
+        .into_iter()
+        .find(|e| {
+            !e.exiting && e.text.as_deref() == Some("Paused · Incoming only · Autoscroll off")
+        })
+        .map(|e| e.visible)
+        .unwrap_or_else(|| panic!("the summary is on screen"));
+    let count = rect_of(&rt, "logger-count");
+    assert!(
+        summary[0] + summary[2] <= count[0],
+        "{summary:?} runs into {count:?}"
+    );
+    assert!(helps(&rt, "Paused · Incoming only · Autoscroll off"));
+}
+
+#[test]
+fn the_structure_reads_strings_as_utf8() {
+    let rt = logger_break_at("Open: edited, long title", LOGGER_SIZE);
+    let fields = texts_in(&rt, "sheet-structure");
+    assert!(
+        fields.iter().any(|t| t.contains("alguém quer trocar")),
+        "{fields:?}"
     );
 }

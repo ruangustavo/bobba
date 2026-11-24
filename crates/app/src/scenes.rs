@@ -10,6 +10,7 @@ use bobba_session::{ConnectionInfo, LogEntry, Outcome};
 use bobba_store::{Catalog, Origin, Os};
 
 use crate::backend::{CatalogEvent, InstalledKind, InstalledState};
+use crate::logger::Logger;
 use crate::state::{App, GEarthOffer, KeyState, Mode, Phase, Tab, Traffic};
 use crate::store_window::StoreWindow;
 
@@ -501,4 +502,245 @@ fn store_huge(s: &mut StoreWindow) {
         &format!("[{}]", listings.join(",")),
         Origin::Fresh,
     );
+}
+
+pub type LoggerScene = (&'static str, fn(&mut Logger));
+
+pub const LOGGER_SCENES: &[LoggerScene] = &[("logger", logger_demo)];
+
+pub type LoggerBreak = (&'static str, &'static str, fn(&mut Logger));
+
+pub const LOGGER_BREAKS: &[LoggerBreak] = &[
+    ("logger", "Worst case", logger_worst),
+    ("logger", "Open: floor plan", |s| open_worst(s, 2)),
+    ("logger", "Open: 600 furni", |s| open_worst(s, 3)),
+    ("logger", "Open: edited, long title", |s| open_worst(s, 4)),
+    ("logger", "Every toggle on", logger_every_toggle),
+    ("logger", "Empty", |s| s.feed.log_mut().clear()),
+    ("logger", "One", logger_one),
+    ("logger", "100,000 rows", logger_huge),
+];
+
+fn logger_demo(s: &mut Logger) {
+    s.feed.log_mut().set_packet_info(packet_info());
+    s.feed.record(traffic());
+}
+
+fn worst_packet_info() -> Arc<PacketInfo> {
+    let entry = |direction, header_id, name: &str| PacketInfoEntry {
+        direction,
+        header_id,
+        name: Some(name.to_owned()),
+        hash: None,
+        structure: None,
+        source: "Sulek".to_owned(),
+    };
+    Arc::new(PacketInfo::from_entries(
+        RELEASE,
+        vec![
+            entry(Direction::ToServer, 597, "Chat"),
+            entry(
+                Direction::ToClient,
+                2690,
+                "NavigatorSearchResultBlocksMessageEvent",
+            ),
+            entry(Direction::ToClient, 1301, "FloorHeightMap"),
+            entry(Direction::ToClient, 1778, "Objects"),
+            entry(Direction::ToClient, 2350, "Chat"),
+            entry(
+                Direction::ToClient,
+                3400,
+                "CatalogPageWithEarliestExpiryMessageEvent",
+            ),
+        ],
+        true,
+    ))
+}
+
+fn floor_plan() -> String {
+    (0..64)
+        .map(|y| {
+            (0..64)
+                .map(|x| if (x + y) % 17 == 0 { 'x' } else { '0' })
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\r")
+}
+
+fn furni(count: i32) -> Packet {
+    let mut packet = Packet::builder(1778)
+        .i32(1)
+        .i32(1)
+        .string("Synthetic Owner")
+        .i32(count);
+    for id in 0..count {
+        packet = packet
+            .i32(100_000 + id)
+            .i32(3897)
+            .i32(id % 12)
+            .i32(id / 12)
+            .i32(2)
+            .string("0.0")
+            .string("1.0")
+            .i32(0)
+            .i32(0)
+            .string("0")
+            .i32(-1)
+            .i32(1)
+            .i32(1);
+    }
+    packet.build()
+}
+
+fn chat_to_client(index: u32, line: &str) -> LogEntry {
+    LogEntry::Intercepted {
+        index,
+        direction: Direction::ToClient,
+        packet: Packet::builder(2350)
+            .i32(7)
+            .string_bytes(line.as_bytes())
+            .i32(0)
+            .i32(0)
+            .i32(-1)
+            .build(),
+        outcome: Outcome::Forwarded,
+    }
+}
+
+fn logger_worst(s: &mut Logger) {
+    s.feed.log_mut().clear();
+    s.feed.log_mut().set_packet_info(worst_packet_info());
+    let entries = vec![
+        LogEntry::Intercepted {
+            index: 0,
+            direction: Direction::ToClient,
+            packet: Packet::builder(3400)
+                .i32(42)
+                .string("catalog_frontpage_2026_black_friday_bundle_offer")
+                .build(),
+            outcome: Outcome::Forwarded,
+        },
+        LogEntry::Intercepted {
+            index: 1,
+            direction: Direction::ToClient,
+            packet: Packet::builder(4093)
+                .string_bytes(&[0, 1, 2, 255, 254, 0x80, b'{', b'}'])
+                .build(),
+            outcome: Outcome::Forwarded,
+        },
+        LogEntry::Intercepted {
+            index: 2,
+            direction: Direction::ToClient,
+            packet: Packet::builder(1301)
+                .bool(true)
+                .i32(-1)
+                .string(&floor_plan())
+                .build(),
+            outcome: Outcome::Forwarded,
+        },
+        LogEntry::Intercepted {
+            index: 3,
+            direction: Direction::ToClient,
+            packet: furni(600),
+            outcome: Outcome::Forwarded,
+        },
+        LogEntry::Intercepted {
+            index: 4,
+            direction: Direction::ToServer,
+            packet: Packet::builder(597)
+                .string_bytes("alguém quer trocar o trono de gelo por 3 dragões?".as_bytes())
+                .i32(0)
+                .i32(-1)
+                .build(),
+            outcome: Outcome::Edited {
+                by: "Copiador de Roupas Automático para Quartos Lotados".into(),
+                sent: Packet::builder(597)
+                    .string(&"[spam] ".repeat(60))
+                    .i32(0)
+                    .i32(-1)
+                    .build(),
+            },
+        },
+        LogEntry::Intercepted {
+            index: 5,
+            direction: Direction::ToServer,
+            packet: Packet::builder(597)
+                .string("Benachrichtigungseinstellungen")
+                .i32(0)
+                .i32(-1)
+                .build(),
+            outcome: Outcome::Blocked {
+                by: "G-Presets - Building & Wired Presets".into(),
+            },
+        },
+        chat_to_client(6, "王秀英: 你好，有人想交易吗？"),
+        chat_to_client(7, "نور الهدى: مرحبا بالجميع"),
+        chat_to_client(8, "👩🏽‍💻 Priya: line one\nline two"),
+        LogEntry::Intercepted {
+            index: 9,
+            direction: Direction::ToServer,
+            packet: Packet::builder(2596).build(),
+            outcome: Outcome::Forwarded,
+        },
+        LogEntry::Injected {
+            direction: Direction::ToClient,
+            packet: Packet::builder(2350)
+                .i32(7)
+                .string_bytes("🎉".repeat(200).as_bytes())
+                .i32(0)
+                .i32(0)
+                .i32(-1)
+                .build(),
+            by: "Konstantin Oberhauser-Wettstein's Party Toolkit".into(),
+        },
+    ];
+    s.feed.record(traffic());
+    s.feed.record(entries);
+}
+
+fn open_worst(s: &mut Logger, row: usize) {
+    logger_worst(s);
+    let first = s.feed.log().len() - 11;
+    let number = s.feed.log().number_at(first + row);
+    if let Some(number) = number {
+        s.open(number);
+    }
+}
+
+fn logger_every_toggle(s: &mut Logger) {
+    logger_huge(s);
+    s.feed.toggle_pause();
+    s.autoscroll = false;
+    s.directions = crate::packet_log::Directions {
+        incoming: true,
+        outgoing: false,
+    };
+    s.filter = rune::TextEdit::new("chat");
+    s.set_filter();
+}
+
+fn logger_one(s: &mut Logger) {
+    s.feed.log_mut().clear();
+    s.feed.log_mut().set_packet_info(packet_info());
+    s.feed.record(vec![chat_to_client(0, "oi")]);
+}
+
+fn logger_huge(s: &mut Logger) {
+    s.feed.log_mut().clear();
+    s.feed.log_mut().set_packet_info(worst_packet_info());
+    let entries = (0..100_000u32)
+        .map(|i| chat_to_client(i, "olá, mundo"))
+        .collect();
+    s.feed.record(entries);
+    s.feed.record(vec![LogEntry::Intercepted {
+        index: 100_000,
+        direction: Direction::ToClient,
+        packet: Packet::builder(1301)
+            .bool(true)
+            .i32(-1)
+            .string("x0")
+            .build(),
+        outcome: Outcome::Forwarded,
+    }]);
 }
