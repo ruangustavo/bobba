@@ -43,3 +43,6 @@ naga = { git = "https://github.com/anomalyco/rune", rev = "0ca3fd741192fa6e79e6d
 accesskit_windows = { git = "https://github.com/anomalyco/rune", rev = "0ca3fd741192fa6e79e6da057e513c8cfd1b4669" }
 accesskit_macos = { git = "https://github.com/anomalyco/rune", rev = "0ca3fd741192fa6e79e6da057e513c8cfd1b4669" }
 accesskit_atspi_common = { git = "https://github.com/anomalyco/rune", rev = "0ca3fd741192fa6e79e6da057e513c8cfd1b4669" }
+
+[profile.dev.package.bobba-protocol]
+opt-level = 3
