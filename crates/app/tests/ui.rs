@@ -565,6 +565,11 @@ fn with_no_extensions_yet_the_list_points_to_the_store() {
         s.extensions.clear();
     });
     settle(&mut rt);
+    assert!(shown(&rt, "extensions-empty-gearth"));
+    assert!(
+        !shown(&rt, "gearth-import-choose"),
+        "the empty list offers the G-Earth import once"
+    );
     press(&mut rt, "extensions-empty-browse");
     assert_eq!(rt.state.store.showing, Showing::Store);
 }
@@ -583,11 +588,17 @@ fn gearth_found(rt: &mut Runtime<App>) {
 fn extensions_found_in_gearth_are_offered_until_dismissed() {
     let mut rt = runtime("extensions");
     assert!(!shown(&rt, "gearth-import"));
+    assert!(shown(&rt, "gearth-import-choose"));
     gearth_found(&mut rt);
     assert!(shows_text(&rt, "Found 4 extensions in G-Earth"));
+    assert!(
+        !shown(&rt, "gearth-import-choose"),
+        "the banner is the only G-Earth import while it is open"
+    );
 
     press(&mut rt, "gearth-import-dismiss");
     assert!(!shown(&rt, "gearth-import"));
+    assert!(shown(&rt, "gearth-import-choose"));
 }
 
 #[test]

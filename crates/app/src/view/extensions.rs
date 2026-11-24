@@ -284,7 +284,8 @@ pub fn view(s: &App) -> El {
             update.into_iter().chain([toggle, uninstall]).collect(),
         ));
     }
-    if s.installed.is_empty() && !s.extensions.iter().any(|(_, info)| info.file.is_none()) {
+    let empty = s.installed.is_empty() && !s.extensions.iter().any(|(_, info)| info.file.is_none());
+    if empty {
         items.push(item(
             p,
             "extensions-empty".into(),
@@ -367,6 +368,8 @@ pub fn view(s: &App) -> El {
             .build(k)
             .key("install-from-file")
     });
+    let banner = gearth_banner(s);
+    let import_offered = empty || banner.is_some();
     let body = match showing {
         Showing::Installed => col()
             .key("installed")
@@ -374,7 +377,7 @@ pub fn view(s: &App) -> El {
             .grow(1.0)
             .min_h(0.0)
             .gap(12.0)
-            .children(gearth_banner(s))
+            .children(banner)
             .child(
                 col()
                     .w_full()
@@ -385,15 +388,15 @@ pub fn view(s: &App) -> El {
                     })
                     .scroll_edge_fade(24.0)
                     .child(list)
-                    .child(
+                    .children((!import_offered).then(|| {
                         row().w_full().pt(8.0).justify_end().child(
                             Button::new("Import from G-Earth…")
                                 .variant(ButtonVariant::GhostMuted)
                                 .on_press_tx(choose_gearth)
                                 .build(k)
                                 .key("gearth-import-choose"),
-                        ),
-                    ),
+                        )
+                    })),
             ),
         Showing::Store => store::view(s),
     };
