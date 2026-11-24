@@ -183,6 +183,15 @@ impl PacketLog {
         self.rows.get(offset)
     }
 
+    pub fn row_by_number(&self, number: u64) -> Option<&LogRow> {
+        let offset = usize::try_from(number.checked_sub(self.first_number())?).ok()?;
+        self.rows.get(offset)
+    }
+
+    pub fn number_at(&self, visible_index: usize) -> Option<u64> {
+        self.visible.get(visible_index).copied()
+    }
+
     pub fn name(&self, row: &LogRow) -> Option<&str> {
         self.packet_info
             .name(row.direction(), row.packet().header_id())

@@ -23,8 +23,18 @@ tempfile = "3"
 bobba-extensions = { path = "crates/extensions" }
 bobba-sulek = { path = "crates/sulek" }
 bobba-intercept = { path = "crates/intercept" }
+rune = { git = "https://github.com/anomalyco/rune", rev = "0ca3fd741192fa6e79e6da057e513c8cfd1b4669", features = ["native-file-dialog"] }
+rune-kit = { git = "https://github.com/anomalyco/rune", rev = "0ca3fd741192fa6e79e6da057e513c8cfd1b4669", default-features = false }
 sha2 = "0.10"
-gpui-kit = "0.11"
-smol = "2"
 bobba-protocol = { path = "crates/protocol" }
 bobba-session = { path = "crates/session" }
+
+[patch.crates-io]
+winit = { git = "https://github.com/anomalyco/rune", rev = "0ca3fd741192fa6e79e6da057e513c8cfd1b4669" }
+sctk-adwaita = { git = "https://github.com/anomalyco/rune", rev = "0ca3fd741192fa6e79e6da057e513c8cfd1b4669" }
+parley_engine = { git = "https://github.com/anomalyco/rune", rev = "0ca3fd741192fa6e79e6da057e513c8cfd1b4669" }
+wgpu-hal = { git = "https://github.com/anomalyco/rune", rev = "0ca3fd741192fa6e79e6da057e513c8cfd1b4669" }
+naga = { git = "https://github.com/anomalyco/rune", rev = "0ca3fd741192fa6e79e6da057e513c8cfd1b4669" }
+accesskit_windows = { git = "https://github.com/anomalyco/rune", rev = "0ca3fd741192fa6e79e6da057e513c8cfd1b4669" }
+accesskit_macos = { git = "https://github.com/anomalyco/rune", rev = "0ca3fd741192fa6e79e6da057e513c8cfd1b4669" }
+accesskit_atspi_common = { git = "https://github.com/anomalyco/rune", rev = "0ca3fd741192fa6e79e6da057e513c8cfd1b4669" }

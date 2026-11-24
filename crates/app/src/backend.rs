@@ -74,6 +74,7 @@ pub enum Command {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AutomaticStep {
     Working(String),
+    AwaitingApproval,
     NeedsPreparation(PathBuf),
     Prepared(PathBuf),
     WaitingForClient(usize),
@@ -103,13 +104,48 @@ pub enum UiEvent {
 }
 
 #[derive(Clone)]
+pub struct UiSink {
+    events: std::sync::mpsc::Sender<UiEvent>,
+    wake: rune::Waker,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Delivery {
+    Delivered,
+    Closed,
+}
+
+impl Delivery {
+    pub fn is_closed(self) -> bool {
+        self == Delivery::Closed
+    }
+}
+
+impl UiSink {
+    pub fn new(wake: rune::Waker) -> (Self, std::sync::mpsc::Receiver<UiEvent>) {
+        let (events, receiver) = std::sync::mpsc::channel();
+        (Self { events, wake }, receiver)
+    }
+
+    pub fn emit(&self, event: UiEvent) -> Delivery {
+        match self.events.send(event) {
+            Ok(()) => {
+                (self.wake)();
+                Delivery::Delivered
+            }
+            Err(_) => Delivery::Closed,
+        }
+    }
+}
+
+#[derive(Clone)]
 pub struct Backend {
     pub host: Arc<Host>,
     commands: mpsc::UnboundedSender<Command>,
 }
 
 impl Backend {
-    pub fn spawn(ui: smol::channel::Sender<UiEvent>) -> Self {
+    pub fn spawn(ui: UiSink) -> Self {
         let (host_events, host_events_rx) = mpsc::unbounded_channel();
         let (permissions, permissions_rx) = mpsc::unbounded_channel();
         let config = HostConfig {
@@ -135,7 +171,7 @@ impl Backend {
             .name("bobba-backend".into())
             .spawn(move || {
                 let Ok(runtime) = tokio::runtime::Runtime::new() else {
-                    let _ = ui.send_blocking(UiEvent::Failed(
+                    ui.emit(UiEvent::Failed(
                         "could not start the network runtime".into(),
                     ));
                     return;
@@ -169,7 +205,7 @@ async fn bind_extension_port() -> Option<TcpListener> {
 
 async fn run(
     host: Arc<Host>,
-    ui: smol::channel::Sender<UiEvent>,
+    ui: UiSink,
     mut commands: mpsc::UnboundedReceiver<Command>,
     mut host_events: mpsc::UnboundedReceiver<HostEvent>,
     mut permissions: mpsc::UnboundedReceiver<PermissionRequest>,
@@ -178,15 +214,13 @@ async fn run(
         Some(listener) => {
             let port = listener.local_addr().ok().map(|address| address.port());
             if let Some(port) = port {
-                let _ = ui.send(UiEvent::ExtensionPort(port)).await;
+                ui.emit(UiEvent::ExtensionPort(port));
             }
             tokio::spawn(serve(listener, host.clone()));
             port
         }
         None => {
-            let _ = ui
-                .send(UiEvent::Failed("no free port for extensions".into()))
-                .await;
+            ui.emit(UiEvent::Failed("no free port for extensions".into()));
             None
         }
     };
@@ -194,11 +228,7 @@ async fn run(
     let output_ui = ui.clone();
     tokio::spawn(async move {
         while let Some(line) = output_rx.recv().await {
-            if output_ui
-                .send(UiEvent::ExtensionOutput(line))
-                .await
-                .is_err()
-            {
+            if output_ui.emit(UiEvent::ExtensionOutput(line)).is_closed() {
                 return;
             }
         }
@@ -222,7 +252,7 @@ async fn run(
                 Some(request) = permissions.recv() => UiEvent::Permission(request),
                 else => return,
             };
-            if forward_ui.send(event).await.is_err() {
+            if forward_ui.emit(event).is_closed() {
                 return;
             }
         }
@@ -252,7 +282,7 @@ async fn run(
             Command::InstallExtension(path) => match runner.installer.install(&path) {
                 Ok(installed) => runner.start(&installed.file_name, &ui).await,
                 Err(error) => {
-                    let _ = ui.send(UiEvent::Notice(error.to_string())).await;
+                    ui.emit(UiEvent::Notice(error.to_string()));
                 }
             },
             Command::StartExtension(file_name) => runner.start(&file_name, &ui).await,
@@ -260,15 +290,13 @@ async fn run(
             Command::UninstallExtension(file_name) => {
                 runner.stop(&file_name).await;
                 if let Err(error) = runner.installer.uninstall(&file_name) {
-                    let _ = ui
-                        .send(UiEvent::Notice(format!("could not uninstall: {error}")))
-                        .await;
+                    ui.emit(UiEvent::Notice(format!("could not uninstall: {error}")));
                 }
             }
             Command::Abort => {
                 if let Some(task) = pending.take() {
                     task.abort();
-                    let _ = ui.send(UiEvent::Session(SessionEvent::Ended)).await;
+                    ui.emit(UiEvent::Session(SessionEvent::Ended));
                 }
             }
         }
@@ -285,7 +313,7 @@ struct Runner {
 }
 
 impl Runner {
-    async fn start(&mut self, file_name: &str, ui: &smol::channel::Sender<UiEvent>) {
+    async fn start(&mut self, file_name: &str, ui: &UiSink) {
         if self.is_running(file_name) {
             return;
         }
@@ -303,11 +331,9 @@ impl Runner {
                 self.running.insert(installed.file_name, child);
             }
             Err(error) => {
-                let _ = ui
-                    .send(UiEvent::Notice(format!(
-                        "could not start {file_name}: {error}"
-                    )))
-                    .await;
+                ui.emit(UiEvent::Notice(format!(
+                    "could not start {file_name}: {error}"
+                )));
             }
         }
     }
@@ -324,7 +350,7 @@ impl Runner {
             .is_some_and(|child| matches!(child.try_wait(), Ok(None)))
     }
 
-    async fn publish(&mut self, ui: &smol::channel::Sender<UiEvent>) {
+    async fn publish(&mut self, ui: &UiSink) {
         let installed = self.installer.installed();
         let states = installed
             .into_iter()
@@ -334,32 +360,28 @@ impl Runner {
                 runtime: e.runtime,
             })
             .collect();
-        let _ = ui.send(UiEvent::Installed(states)).await;
+        ui.emit(UiEvent::Installed(states));
     }
 }
 
-async fn connect(target: DirectTarget, host: Arc<Host>, ui: smol::channel::Sender<UiEvent>) {
+async fn connect(target: DirectTarget, host: Arc<Host>, ui: UiSink) {
     let listen = SocketAddr::from((Ipv4Addr::LOCALHOST, target.listen_port));
     let proxy = match DirectProxy::bind(listen, target.hotel).await {
         Ok(proxy) => proxy,
         Err(error) => {
-            let _ = ui
-                .send(UiEvent::Failed(format!(
-                    "cannot listen on {listen}: {error}"
-                )))
-                .await;
+            ui.emit(UiEvent::Failed(format!(
+                "cannot listen on {listen}: {error}"
+            )));
             return;
         }
     };
     if let Ok(address) = proxy.local_addr() {
-        let _ = ui.send(UiEvent::Listening(address)).await;
+        ui.emit(UiEvent::Listening(address));
     }
     let session = match proxy.accept().await {
         Ok(session) => session,
         Err(error) => {
-            let _ = ui
-                .send(UiEvent::Failed(format!("hotel unreachable: {error}")))
-                .await;
+            ui.emit(UiEvent::Failed(format!("hotel unreachable: {error}")));
             return;
         }
     };
@@ -371,56 +393,44 @@ async fn connect(target: DirectTarget, host: Arc<Host>, ui: smol::channel::Sende
     run_session(session, host, tables, ui).await;
 }
 
-async fn connect_automatically(host: Arc<Host>, ui: smol::channel::Sender<UiEvent>) {
+async fn connect_automatically(host: Arc<Host>, ui: UiSink) {
     let step = |text: &str| UiEvent::Automatic(AutomaticStep::Working(text.to_owned()));
     let fail = |text: String| UiEvent::Automatic(AutomaticStep::Failed(text));
-    let _ = ui
-        .send(step(
-            "Checking G-MemZ, which reads the encryption key from Habbo",
-        ))
-        .await;
+    ui.emit(step(
+        "Checking G-MemZ, which reads the encryption key from Habbo",
+    ));
     let gmemz = gmemz::default_path();
     if let Err(error) = gmemz::ensure_installed(&gmemz).await {
-        let _ = ui.send(fail(error.to_string())).await;
+        ui.emit(fail(error.to_string()));
         return;
     }
-    let _ = ui.send(step("Checking the Habbo client")).await;
+    ui.emit(step("Checking the Habbo client"));
     match client::client_state().await {
         ClientState::Ready(_) => {}
         ClientState::NotInstalled => {
-            let _ = ui
-                .send(fail(
-                    "Install the Habbo Launcher and open Habbo once, then try again".into(),
-                ))
-                .await;
+            ui.emit(fail(
+                "Install the Habbo Launcher and open Habbo once, then try again".into(),
+            ));
             return;
         }
         ClientState::NeedsPreparation(app) => {
-            let _ = ui
-                .send(UiEvent::Automatic(AutomaticStep::NeedsPreparation(app)))
-                .await;
+            ui.emit(UiEvent::Automatic(AutomaticStep::NeedsPreparation(app)));
             return;
         }
     }
-    let _ = ui.send(step("Finding the hotels")).await;
+    ui.emit(step("Finding the hotels"));
     let redirects = resolve_hotels(&HOTEL_HOSTS).await;
     if redirects.is_empty() {
-        let _ = ui
-            .send(fail(
-                "Could not resolve any Habbo game server; check your internet".into(),
-            ))
-            .await;
+        ui.emit(fail(
+            "Could not resolve any Habbo game server; check your internet".into(),
+        ));
         return;
     }
-    let _ = ui
-        .send(step(
-            "Approve the administrator prompt so Bobba can redirect the hotels",
-        ))
-        .await;
+    ui.emit(UiEvent::Automatic(AutomaticStep::AwaitingApproval));
     let redirect = match HostsRedirect::apply(&redirects).await {
         Ok(redirect) => redirect,
         Err(error) => {
-            let _ = ui.send(fail(error.to_string())).await;
+            ui.emit(fail(error.to_string()));
             return;
         }
     };
@@ -428,47 +438,41 @@ async fn connect_automatically(host: Arc<Host>, ui: smol::channel::Sender<UiEven
         Ok(listeners) => listeners,
         Err(error) => {
             redirect.remove().await;
-            let _ = ui
-                .send(fail(format!("could not listen for the client: {error}")))
-                .await;
+            ui.emit(fail(format!("could not listen for the client: {error}")));
             return;
         }
     };
-    let _ = ui
-        .send(UiEvent::Automatic(AutomaticStep::WaitingForClient(
-            redirects.len(),
-        )))
-        .await;
+    ui.emit(UiEvent::Automatic(AutomaticStep::WaitingForClient(
+        redirects.len(),
+    )));
     let accepted = listeners.accept_first().await;
     redirect.remove().await;
     let session = match accepted {
         Ok((session, _)) => session,
         Err(error) => {
-            let _ = ui.send(fail(format!("hotel unreachable: {error}"))).await;
+            ui.emit(fail(format!("hotel unreachable: {error}")));
             return;
         }
     };
     run_session(session, host, Arc::new(GMemZ { binary: gmemz }), ui).await;
 }
 
-async fn prepare_client(app: PathBuf, ui: smol::channel::Sender<UiEvent>) {
-    let _ = ui
-        .send(UiEvent::Automatic(AutomaticStep::Working(
-            "Re-signing Habbo.app".into(),
-        )))
-        .await;
+async fn prepare_client(app: PathBuf, ui: UiSink) {
+    ui.emit(UiEvent::Automatic(AutomaticStep::Working(
+        "Re-signing Habbo.app".into(),
+    )));
     let event = match client::prepare(&app).await {
         Ok(original) => UiEvent::Automatic(AutomaticStep::Prepared(original)),
         Err(error) => UiEvent::Automatic(AutomaticStep::Failed(error.to_string())),
     };
-    let _ = ui.send(event).await;
+    ui.emit(event);
 }
 
 async fn run_session(
     session: bobba_session::Session,
     host: Arc<Host>,
     tables: Arc<dyn TableSource>,
-    ui: smol::channel::Sender<UiEvent>,
+    ui: UiSink,
 ) {
     let (session_events, mut session_events_rx) = mpsc::unbounded_channel();
     let (log, mut log_rx) = mpsc::channel(LOG_CHANNEL_CAPACITY);
@@ -483,12 +487,12 @@ async fn run_session(
                 while let Ok(entry) = log_rx.try_recv() {
                     batch.push(entry);
                 }
-                if !batch.is_empty() && ui.send(UiEvent::Log(std::mem::take(&mut batch))).await.is_err() {
+                if !batch.is_empty() && ui.emit(UiEvent::Log(std::mem::take(&mut batch))).is_closed() {
                     return;
                 }
             }
             Some(event) = session_events_rx.recv() => {
-                let _ = ui.send(UiEvent::Session(event)).await;
+                ui.emit(UiEvent::Session(event));
             }
             _ = &mut finished => break,
         }
@@ -497,10 +501,10 @@ async fn run_session(
         batch.push(entry);
     }
     if !batch.is_empty() {
-        let _ = ui.send(UiEvent::Log(batch)).await;
+        ui.emit(UiEvent::Log(batch));
     }
     while let Ok(event) = session_events_rx.try_recv() {
-        let _ = ui.send(UiEvent::Session(event)).await;
+        ui.emit(UiEvent::Session(event));
     }
     drop(abort_on_drop);
 }

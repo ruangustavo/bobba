@@ -10,16 +10,6 @@ bobba-intercept.workspace = true
 bobba-protocol.workspace = true
 bobba-session.workspace = true
 bobba-sulek.workspace = true
-gpui-kit.workspace = true
-smol.workspace = true
+rune.workspace = true
+rune-kit.workspace = true
 tokio.workspace = true
-
-[dev-dependencies]
-gpui-kit = { workspace = true, features = ["test-support"] }
-tokio.workspace = true
-bobba-protocol.workspace = true
-bobba-session.workspace = true
-image = { version = "0.25", default-features = false, features = ["png"] }
-
-[target.'cfg(target_os = "macos")'.dev-dependencies]
-gpui-pre-apple = "=0.3.14"

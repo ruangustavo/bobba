@@ -1,157 +1,90 @@
-use bobba::app::{AppTab, BobbaApp, ConnectionStatus, Traffic};
-use bobba::backend::{Backend, UiEvent};
-use bobba::injection::SendResult;
-use bobba::logger::LoggerEvent;
+use bobba::backend::UiEvent;
+use bobba::scenes::SCENES;
+use bobba::state::{App, Phase, SendResult, Tab};
+use bobba::view::root;
 use bobba_extensions::{Permission, PermissionRequest};
 use bobba_protocol::extension_message::ExtensionInfo;
-use bobba_protocol::{Direction, Packet};
-use bobba_session::{ConnectionInfo, LogEntry, Outcome, SessionEvent};
-use gpui_kit::test::TestWindowExt;
-use gpui_kit::{
-    AppContext, Bounds, Entity, Point, TestAppContext, WindowBounds, WindowHandle, WindowOptions,
-    base::Root, px, size,
-};
+use rune::{Env, Runtime};
 
-fn open_app(cx: &mut TestAppContext) -> (WindowHandle<Root>, Entity<BobbaApp>) {
-    cx.update(gpui_kit::init);
-    cx.update(|cx| {
-        let (ui, events) = smol::channel::unbounded();
-        let backend = Backend::spawn(ui);
-        let bounds = Bounds {
-            origin: Point::default(),
-            size: size(px(1180.), px(760.)),
-        };
-        let (window, app) = gpui_kit::open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                ..Default::default()
-            },
-            cx,
-            |window, cx| cx.new(|cx| BobbaApp::new(backend, events, window, cx)),
-        )
-        .expect("window opens");
-        (window.downcast::<Root>().expect("root window"), app)
-    })
+const SIZE: (f32, f32) = (1180.0, 760.0);
+
+fn runtime(scene: &str) -> Runtime<App> {
+    let mut app = App::new();
+    if let Some((_, apply)) = SCENES.iter().find(|(name, _)| *name == scene) {
+        apply(&mut app);
+    }
+    let mut rt = Runtime::new(app, root, SIZE, Env::new(true, 2.0));
+    rt.frame(0.0);
+    settle(&mut rt);
+    rt
 }
 
-fn send_events(
-    cx: &mut TestAppContext,
-    window: WindowHandle<Root>,
-    app: &Entity<BobbaApp>,
-    events: Vec<UiEvent>,
-) {
-    cx.update_window(window.into(), |_, window, cx| {
-        app.update(cx, |app, cx| {
-            for event in events {
-                app.handle(event, window, cx);
-            }
-        });
-    })
-    .expect("window alive");
-}
-
-fn connected() -> UiEvent {
-    UiEvent::Session(SessionEvent::Connected(ConnectionInfo {
-        host: "127.0.0.1".into(),
-        port: 30001,
-        hotel_version: "MAC63-1".into(),
-        client_identifier: "FLASH31".into(),
-        client_type: "FLASH".into(),
-    }))
-}
-
-fn chat(direction: Direction, outcome: Outcome) -> LogEntry {
-    LogEntry::Intercepted {
-        index: 0,
-        direction,
-        packet: Packet::builder(597).string("oi").i32(0).i32(-1).build(),
-        outcome,
+fn settle(rt: &mut Runtime<App>) {
+    for _ in 0..30 {
+        rt.frame(1.0 / 60.0);
     }
 }
 
-#[gpui_kit::test]
-fn traffic_reaches_the_logger_and_the_status_bar(cx: &mut TestAppContext) {
-    let (window, app) = open_app(cx);
-    send_events(
-        cx,
-        window,
-        &app,
-        vec![
-            connected(),
-            UiEvent::Log(vec![
-                chat(Direction::ToServer, Outcome::Forwarded),
-                chat(
-                    Direction::ToServer,
-                    Outcome::Blocked {
-                        by: "AntiSpam".into(),
-                    },
-                ),
-                chat(Direction::ToClient, Outcome::Forwarded),
-            ]),
-        ],
+fn press(rt: &mut Runtime<App>, key: &str) {
+    let (x, y) = rt.find(key).unwrap_or_else(|| panic!("{key} is on screen"));
+    rt.pointer_down(x, y);
+    rt.pointer_up(x, y);
+    settle(rt);
+}
+
+#[test]
+fn connect_starts_the_automatic_flow_and_offers_abort() {
+    let mut rt = runtime("idle");
+    press(&mut rt, "connect");
+    assert_eq!(rt.state.phase, Phase::Preparing("Starting".into()));
+    assert!(rt.find("abort").is_some());
+}
+
+#[test]
+fn switching_to_manual_shows_the_host_fields() {
+    let mut rt = runtime("idle");
+    assert!(rt.find("manual-fields").is_none());
+    press(&mut rt, "switch-mode");
+    assert!(rt.find("manual-fields").is_some());
+}
+
+#[test]
+fn use_in_injection_fills_the_editor_and_switches_tab() {
+    let mut rt = runtime("logger-selected");
+    let expected = rt
+        .state
+        .selected_row()
+        .map(|row| row.number)
+        .expect("a row is selected");
+    assert!(rt.find("logger-detail").is_some());
+    press(&mut rt, "logger-use");
+    assert_eq!(rt.state.tab, Tab::Injection);
+    assert!(
+        rt.state.injection.text.starts_with("{out:Chat}"),
+        "row {expected} became an expression"
     );
-    cx.update(|cx| {
-        let app = app.read(cx);
-        assert!(matches!(app.status(), ConnectionStatus::Connected(_)));
-        assert_eq!(
-            app.traffic(),
-            Traffic {
-                to_server: 2,
-                to_client: 1
-            }
-        );
-        assert_eq!(app.logger().read(cx).row_count(cx), 3);
+}
+
+#[test]
+fn injection_without_a_hotel_explains_why_nothing_was_sent() {
+    let mut rt = runtime("idle");
+    rt.update(|s, _| {
+        s.tab = Tab::Injection;
+        s.injection.replace_text("{h:597}{s:\"oi\"}");
     });
-    cx.update_window(window.into(), |_, window, cx| {
-        app.update(cx, |app, cx| app.select_tab(AppTab::Logger, cx));
-        window.render_frame(cx);
-        assert!(window.find("logger-filter").visible());
-        assert!(window.find("traffic-out").visible());
-    })
-    .expect("window alive");
+    settle(&mut rt);
+    press(&mut rt, "send-to-server");
+    assert_eq!(
+        rt.state.last_send,
+        Some(SendResult::Refused("not connected to a hotel".into()))
+    );
 }
 
-#[gpui_kit::test]
-fn injection_without_a_hotel_explains_why_nothing_was_sent(cx: &mut TestAppContext) {
-    let (window, app) = open_app(cx);
-    cx.update_window(window.into(), |_, window, cx| {
-        let injection = app.read(cx).injection().clone();
-        injection.update(cx, |panel, cx| {
-            panel.load("{h:597}{s:\"oi\"}".into(), window, cx)
-        });
-        app.update(cx, |app, cx| app.select_tab(AppTab::Injection, cx));
-        window.render_frame(cx);
-        window.click("send-to-server", cx);
-        assert_eq!(
-            injection.read(cx).last_result(),
-            Some(&SendResult::Refused("not connected to a hotel".into()))
-        );
-    })
-    .expect("window alive");
-}
-
-#[gpui_kit::test]
-fn use_in_injection_switches_tab_and_fills_the_editor(cx: &mut TestAppContext) {
-    let (window, app) = open_app(cx);
-    cx.update_window(window.into(), |_, _, cx| {
-        let logger = app.read(cx).logger().clone();
-        logger.update(cx, |_, cx| {
-            cx.emit(LoggerEvent::UseInInjection {
-                expression: "{out:Chat}{s:\"oi\"}".into(),
-                direction: Direction::ToServer,
-            });
-        });
-    })
-    .expect("window alive");
-    cx.run_until_parked();
-    cx.update(|cx| assert_eq!(app.read(cx).tab(), AppTab::Injection));
-}
-
-#[gpui_kit::test]
-fn permission_banner_asks_and_answers_the_extension(cx: &mut TestAppContext) {
-    let (window, app) = open_app(cx);
+#[test]
+fn permission_banner_answers_the_extension() {
+    let mut rt = runtime("idle");
     let (respond, mut answer) = tokio::sync::oneshot::channel();
-    let request = PermissionRequest {
+    let request = UiEvent::Permission(PermissionRequest {
         info: ExtensionInfo {
             title: "AntiSpam".into(),
             author: "ruan".into(),
@@ -164,40 +97,62 @@ fn permission_banner_asks_and_answers_the_extension(cx: &mut TestAppContext) {
             can_delete: true,
         },
         respond,
-    };
-    send_events(cx, window, &app, vec![UiEvent::Permission(request)]);
-    cx.update_window(window.into(), |_, window, cx| {
-        window.render_frame(cx);
-        assert!(window.find("permission-banner").visible());
-        window.click("permission-allow", cx);
-        window.render_frame(cx);
-        assert!(window.try_find("permission-banner").is_none());
-    })
-    .expect("window alive");
+    });
+    rt.update(move |s, _| s.handle(request));
+    settle(&mut rt);
+    assert!(rt.find("permission-banner").is_some());
+    press(&mut rt, "permission-allow");
     assert_eq!(answer.try_recv(), Ok(Permission::Allow));
+    assert!(rt.find("permission-banner").is_none());
 }
 
-#[gpui_kit::test]
-fn automatic_mode_offers_to_prepare_the_client_and_manual_mode_shows_fields(
-    cx: &mut TestAppContext,
-) {
-    let (window, app) = open_app(cx);
-    send_events(
-        cx,
-        window,
-        &app,
-        vec![UiEvent::Automatic(
-            bobba::backend::AutomaticStep::NeedsPreparation("/Applications/Habbo.app".into()),
-        )],
-    );
-    cx.update_window(window.into(), |_, window, cx| {
-        window.render_frame(cx);
-        assert!(window.find("prepare-client").visible());
-        assert!(window.find("automatic-step").visible());
-        assert!(window.try_find("hotel-host").is_none());
-        window.click("mode-manual", cx);
-        window.render_frame(cx);
-        assert!(window.find("hotel-host").visible());
-    })
-    .expect("window alive");
+#[test]
+fn connected_session_shows_its_facts() {
+    let rt = runtime("connected");
+    for key in [
+        "fact-hotel",
+        "fact-client",
+        "fact-names",
+        "fact-encryption",
+        "fact-traffic",
+        "fact-extensions",
+    ] {
+        assert!(rt.find(key).is_some(), "{key} is shown");
+    }
+}
+
+#[test]
+fn events_sent_through_the_sink_wake_the_window_and_reach_the_screen() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use bobba::backend::UiSink;
+    use bobba_protocol::{Direction, Packet};
+    use bobba_session::{LogEntry, Outcome};
+
+    let wakes = Arc::new(AtomicUsize::new(0));
+    let counter = wakes.clone();
+    let (sink, events) = UiSink::new(Arc::new(move || {
+        counter.fetch_add(1, Ordering::SeqCst);
+    }));
+    let mut app = App::new();
+    app.listen(events);
+    app.tab = Tab::Logger;
+    let mut rt = Runtime::new(app, root, SIZE, Env::new(true, 2.0));
+    rt.poll = Some(bobba::poll);
+    rt.frame(0.0);
+
+    let chat = Packet::builder(597).string("oi").i32(0).i32(-1).build();
+    sink.emit(UiEvent::Log(vec![LogEntry::Intercepted {
+        index: 0,
+        direction: Direction::ToServer,
+        packet: chat,
+        outcome: Outcome::Forwarded,
+    }]));
+    settle(&mut rt);
+
+    assert_eq!(wakes.load(Ordering::SeqCst), 1);
+    assert_eq!(rt.state.log.len(), 1);
+    assert_eq!(rt.state.traffic.to_server, 1);
+    assert!(rt.find("logger-count").is_some());
 }
