@@ -1,8 +1,6 @@
 use std::collections::HashSet;
 
-use bobba::backend::{
-    AutomaticStep, CatalogEvent, InstalledKind, InstalledState, StoreInstall, UiEvent,
-};
+use bobba::backend::{CatalogEvent, InstalledKind, InstalledState, StoreInstall, UiEvent};
 use bobba::log_feed::LogFeed;
 use bobba::logger::Logger;
 use bobba::scenes::{BREAKS, LOGGER_BREAKS, LOGGER_SCENES, SCENES};
@@ -83,10 +81,11 @@ fn setup_says_the_password_is_asked_on_every_connect() {
 }
 
 #[test]
+#[cfg(target_os = "macos")]
 fn a_failed_setup_step_names_what_failed() {
     let mut rt = runtime("resign");
     rt.update(|s, _| {
-        s.handle(UiEvent::Automatic(AutomaticStep::Failed(
+        s.handle(UiEvent::Automatic(bobba::backend::AutomaticStep::Failed(
             "codesign failed".into(),
         )))
     });
@@ -123,17 +122,19 @@ fn connect_starts_the_automatic_flow_and_offers_abort() {
 #[test]
 fn first_run_lists_every_setup_step_before_connecting() {
     let rt = runtime("idle");
-    for step in 0..3 {
+    let count = Step::ALL.len();
+    for step in 0..count {
         assert!(
             rt.find(&format!("setup-step-{step}")).is_some(),
             "step {step} is listed"
         );
     }
-    assert!(rt.find("setup-step-3").is_none());
+    assert!(rt.find(&format!("setup-step-{count}")).is_none());
     assert!(rt.find("connect").is_some());
 }
 
 #[test]
+#[cfg(target_os = "macos")]
 fn the_step_waiting_on_you_opens_with_its_action() {
     let mut rt = runtime("resign");
     assert!(rt.find("setup-open-0").is_some());
@@ -152,10 +153,11 @@ fn setup_markers_hold_their_place_as_their_step_changes() {
 }
 
 #[test]
+#[cfg(target_os = "macos")]
 fn a_failed_setup_step_offers_to_try_again() {
     let mut rt = runtime("resign");
     rt.update(|s, _| {
-        s.handle(UiEvent::Automatic(AutomaticStep::Failed(
+        s.handle(UiEvent::Automatic(bobba::backend::AutomaticStep::Failed(
             "codesign failed".into(),
         )))
     });
