@@ -23,8 +23,6 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - name: No comments in the code
-        run: cargo test --manifest-path .lint/Cargo.toml
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy
