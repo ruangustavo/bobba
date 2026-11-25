@@ -4,7 +4,7 @@ Run your G-Earth extensions on Habbo with an app that's light on your computer.
 
 Bobba sits between Habbo and the hotel, shows you every packet, and runs the same extensions you already use with G-Earth. It's written in Rust and runs natively, with no Java needed to run the app itself.
 
-<!-- demo video -->
+![Bobba's packet logger, injection and Extension Store](docs/media/demo-poster.png)
 
 **[Download the latest version](https://github.com/ruangustavo/bobba/releases/latest)** · macOS and Windows · Flash/AIR client
 
