@@ -8,8 +8,6 @@ https://github.com/user-attachments/assets/30b3ea8c-fc9e-4a7d-8f28-218070d6e65d
 
 **[Download the latest version](https://github.com/ruangustavo/bobba/releases/latest)** · macOS and Windows · Flash/AIR client
 
-![Bobba's Extensions tab](docs/media/extensions.png)
-
 ## Why Bobba
 
 G-Earth is the tool the Habbo community built, and it works. Bobba isn't meant to replace it. It's an alternative that's lighter on your computer and simpler to set up, and as a player you keep using the extensions you already use in G-Earth.
@@ -60,11 +58,13 @@ Measured on November 24, 2026 on a Mac (Apple M5 Pro), G-Earth 1.5.4-beta-29 aga
 2. Open Habbo from the Habbo Launcher, as usual.
 3. Bobba connects on its own. Open the **Logger** to see the packets, the **Injection** tab to send your own, or the **Store** to add extensions.
 
-![Sending a packet from the Injection tab](docs/media/injection.png)
-
 ## For the nerds
 
-Measured with `bobba-bench` against G-Earth 1.5.4-beta-29 on the same inputs. The full method and the commands to reproduce are in [`bench/RESULTS.md`](bench/RESULTS.md).
+Both apps ran their own code on the same inputs, on an Apple M5 Pro with macOS 26.5.1, with G-Earth 1.5.4-beta-29 on its bundled Java 21. Each test warms up first, then reports the median of the measured rounds.
+
+- Proxy: a load generator talks to a local echo server, first directly and then through each proxy. Bobba runs its real proxy and extension host; G-Earth runs its own proxy thread, connection and extension handler. No extensions are connected. Round trips are 10,000 chat-sized packets sent one at a time, and the flood is 200,000 of them written at once.
+- Key recovery: both get a 280-byte encrypted login and nine RC4 tables scraped from memory, eight of them decoys. G-Earth runs the brute force from its `Rc4Obtainer`, copied line for line. The wrong-key count comes from 1,000 more logins with random keys.
+- Expressions: 10,000 random packets of ints, strings and booleans.
 
 | | G-Earth | Bobba |
 |---|---|---|
