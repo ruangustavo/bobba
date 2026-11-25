@@ -1,0 +1,61 @@
+name: release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    outputs:
+      created: ${{ steps.release.outputs.release_created }}
+      tag: ${{ steps.release.outputs.tag_name }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - id: release
+        uses: googleapis/release-please-action@v4
+        with:
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+
+  macos:
+    needs: release-please
+    if: needs.release-please.outputs.created == 'true'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - name: Package
+        run: ./scripts/package-macos.sh
+      - name: Upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ needs.release-please.outputs.tag }}" target/dist/*.dmg
+
+  windows:
+    needs: release-please
+    if: needs.release-please.outputs.created == 'true'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --release --locked -p bobba
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force target/dist | Out-Null
+          Copy-Item target/release/bobba.exe target/dist/Bobba.exe
+          Compress-Archive -Path target/dist/Bobba.exe -DestinationPath "target/dist/Bobba-${{ needs.release-please.outputs.version }}-windows.zip"
+      - name: Upload
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ needs.release-please.outputs.tag }}" (Get-ChildItem target/dist/*.zip).FullName
